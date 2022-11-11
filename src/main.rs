@@ -5,7 +5,7 @@ use fhe::bfv::{
     RelinearizationKey, SecretKey,
 };
 use fhe_math::zq::Modulus;
-use fhe_traits::{FheEncoder, FheEncrypter};
+use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use fhe_util::sample_vec_cbd;
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
@@ -184,7 +184,7 @@ fn prep_sk() {
 
     // generate 2 PVW cts
     let p_c1 = pvw_pk.encrypt(vec![1, 0, 0, 0]);
-    let p_c2 = pvw_pk.encrypt(vec![0, 0, 0, 1]);
+    let p_c2 = pvw_pk.encrypt(vec![1, 1, 0, 1]);
 
     // Encode pvw cts into simd vecs.
     // Each SIMD pt consists of nth `a` element
@@ -195,6 +195,18 @@ fn prep_sk() {
             .unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
         h_a[n_i] = ct;
+    }
+
+    let mut h_b = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
+    for ell_i in 0..pvw_params.ell {
+        let pt = Plaintext::try_encode(
+            &[p_c1.b[ell_i], p_c2.b[ell_i]],
+            Encoding::simd(),
+            &bfv_params,
+        )
+        .unwrap();
+        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+        h_b[ell_i] = ct;
     }
 
     let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
@@ -214,6 +226,16 @@ fn prep_sk() {
     }
 
     // now perform b-sa
+    let mut h_d = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
+    for ell_i in 0..pvw_params.ell {
+        h_d[ell_i] = &h_b[ell_i] - &h_ska[ell_i];
+    }
+
+    for i in 0..pvw_params.ell {
+        let d = bfv_sk.try_decrypt(&h_d[i]).unwrap();
+        let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
+        dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
+    }
 }
 
 #[cfg(test)]
