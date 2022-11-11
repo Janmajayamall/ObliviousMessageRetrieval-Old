@@ -1,9 +1,15 @@
 use std::vec;
 
+use fhe::bfv::{
+    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, Multiplicator, Plaintext,
+    RelinearizationKey, SecretKey,
+};
 use fhe_math::zq::Modulus;
+use fhe_traits::{FheEncoder, FheEncrypter};
 use fhe_util::sample_vec_cbd;
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct PVWParameters {
@@ -26,7 +32,7 @@ impl Default for PVWParameters {
     }
 }
 
-struct Ciphertext {
+struct PVWCiphertext {
     a: Vec<u64>,
     b: Vec<u64>,
 }
@@ -38,7 +44,7 @@ struct PublicKey {
 }
 
 impl PublicKey {
-    pub fn encrypt(&self, m: Vec<u64>) -> Ciphertext {
+    pub fn encrypt(&self, m: Vec<u64>) -> PVWCiphertext {
         let mut rng = thread_rng();
         let q = Modulus::new(self.params.q).unwrap();
         let t = m.iter().map(|v| (self.params.q / 2) * v).collect_vec();
@@ -67,17 +73,17 @@ impl PublicKey {
             b[ell_i] = q.add(b[ell_i], sum);
         }
 
-        Ciphertext { a, b }
+        PVWCiphertext { a, b }
     }
 }
 
-struct SecretKey {
+struct PVWSecretKey {
     key: Vec<Vec<u64>>,
     params: PVWParameters,
 }
 
-impl SecretKey {
-    pub fn gen_sk(params: &PVWParameters) -> SecretKey {
+impl PVWSecretKey {
+    pub fn gen_sk(params: &PVWParameters) -> PVWSecretKey {
         let mut rng = rand::thread_rng();
         let q = Modulus::new(params.q).unwrap();
 
@@ -86,7 +92,7 @@ impl SecretKey {
             cols.push(q.random_vec(params.n, &mut rng));
         }
 
-        SecretKey {
+        PVWSecretKey {
             key: cols,
             params: params.clone(),
         }
@@ -123,7 +129,7 @@ impl SecretKey {
         }
     }
 
-    fn decrypt(&self, ct: Ciphertext) -> Vec<u64> {
+    fn decrypt(&self, ct: PVWCiphertext) -> Vec<u64> {
         let q = Modulus::new(self.params.q).unwrap();
 
         // b - sa
@@ -143,9 +149,81 @@ impl SecretKey {
     }
 }
 
+fn prep_sk() {
+    let mut rng = thread_rng();
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(8)
+            .set_plaintext_modulus(65537)
+            .set_moduli_sizes(&vec![62usize; 3])
+            .build()
+            .unwrap(),
+    );
+    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+    let pvw_params = PVWParameters {
+        n: 450,
+        m: 100,
+        ell: 4,
+        variance: 2,
+        q: 65537,
+    };
+    let pvw_sk = PVWSecretKey::gen_sk(&pvw_params);
+    let pvw_pk = pvw_sk.public_key();
+
+    let mut h_pvw_sk = vec![vec![Ciphertext::zero(&bfv_params); pvw_params.n]; pvw_params.ell];
+    for l_i in 0..pvw_params.ell {
+        for n_i in 0..pvw_params.n {
+            let element = pvw_sk.key[l_i][n_i];
+            let element_arr = vec![element; bfv_params.degree()];
+            let pt = Plaintext::try_encode(&element_arr, Encoding::simd(), &bfv_params).unwrap();
+            let ct = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+            h_pvw_sk[l_i][n_i] = ct;
+        }
+    }
+
+    // generate 2 PVW cts
+    let p_c1 = pvw_pk.encrypt(vec![1, 0, 0, 0]);
+    let p_c2 = pvw_pk.encrypt(vec![0, 0, 0, 1]);
+
+    // Encode pvw cts into simd vecs.
+    // Each SIMD pt consists of nth `a` element
+    // al pvw cts
+    let mut h_a = vec![Ciphertext::zero(&bfv_params); pvw_params.n];
+    for n_i in 0..pvw_params.n {
+        let pt = Plaintext::try_encode(&[p_c1.a[n_i], p_c2.a[n_i]], Encoding::simd(), &bfv_params)
+            .unwrap();
+        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+        h_a[n_i] = ct;
+    }
+
+    let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
+    let multiplicator = Multiplicator::default(&rlk).unwrap();
+
+    // sk * a (homomorphically)
+    let mut h_ska = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
+    for el_i in 0..pvw_params.ell {
+        let mut sum = Ciphertext::zero(&bfv_params);
+        for n_i in 0..pvw_params.n {
+            let product = multiplicator
+                .multiply(&h_pvw_sk[el_i][n_i], &h_a[n_i])
+                .unwrap();
+            sum = &sum + &product;
+        }
+        h_ska[el_i] = sum;
+    }
+
+    // now perform b-sa
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trial() {
+        prep_sk();
+    }
 
     #[test]
     fn encrypt() {
@@ -158,7 +236,7 @@ mod tests {
         };
         for _ in 0..10 {
             let mut rng = thread_rng();
-            let sk = SecretKey::gen_sk(&params);
+            let sk = PVWSecretKey::gen_sk(&params);
             let pk = sk.public_key();
 
             let distr = Uniform::new(0u64, 2);
@@ -175,3 +253,9 @@ mod tests {
 fn main() {
     println!("Hello, world!");
 }
+
+// 1. Generate sk cts:
+//     Sk is of form ell * n and A is of form n * 1 and we need to perform
+//     Sk * A. So we need to create ct encrypting every element in Sk,
+//     so that Sk * A can be calculated for multiple encryptions
+//     using SIMD.
