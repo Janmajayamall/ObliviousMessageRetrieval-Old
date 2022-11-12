@@ -47,7 +47,16 @@ impl PublicKey {
     pub fn encrypt(&self, m: Vec<u64>) -> PVWCiphertext {
         let mut rng = thread_rng();
         let q = Modulus::new(self.params.q).unwrap();
-        let t = m.iter().map(|v| (self.params.q / 2) * v).collect_vec();
+        let t = m
+            .iter()
+            .map(|v| {
+                if *v == 1 {
+                    (3 * self.params.q / 4)
+                } else {
+                    (self.params.q / 4)
+                }
+            })
+            .collect_vec();
 
         let distr = Uniform::new(0u64, 2);
         let e = distr
@@ -144,9 +153,80 @@ impl PVWSecretKey {
         }
 
         d.iter_mut()
-            .for_each(|v| *v = ((*v + (self.params.q / 4)) / (self.params.q / 2)) % 2);
+            .for_each(|v| *v = (*v >= self.params.q / 2) as u64);
         d
     }
+}
+
+fn precompute_range_coeffs() {
+    // precompute coefficients
+    //
+    // Range function returns 1 if input > 65536 / 2
+    // otherwise returns 0.
+    let q = Modulus::new(65537).unwrap();
+    let mut coeffs = vec![];
+    for i in 0..65537 {
+        let mut sum = 0;
+        for a in 0..65537 {
+            // f(a) * a.pow(65536 - i)
+            let v = {
+                if a < 32768 {
+                    0u64
+                } else {
+                    q.pow(a, 65536 - i)
+                }
+            };
+            sum = q.add(sum, v);
+        }
+        coeffs.push(sum);
+    }
+}
+
+fn sq_mul() {
+    let degree = 8;
+    let input = 2u64;
+    let mut outputs = vec![0u64; degree];
+
+    for i in (0..degree + 1).rev() {
+        let mut curr_deg = i;
+        let mut base = input;
+        let mut res = 1;
+        let mut base_deg = 1;
+        let mut res_deg = 0;
+        while curr_deg > 0 {
+            if (curr_deg & 1) == 1 {
+                curr_deg -= 1;
+                res_deg = res_deg + base_deg;
+
+                if outputs[res_deg - 1] != 0 {
+                    res = outputs[res_deg - 1];
+                } else {
+                    res = res * base;
+                    outputs[res_deg - 1] = res;
+                }
+            } else {
+                curr_deg /= 2;
+                base_deg *= 2;
+
+                if outputs[base_deg - 1] != 0 {
+                    base = outputs[base_deg - 1];
+                } else {
+                    base = base * base;
+                    outputs[base_deg - 1] = base;
+                }
+            }
+        }
+    }
+
+    dbg!(outputs);
+}
+
+fn range_fn() {
+    // load coeffs
+    let coeffs = vec![0u64; 65537];
+
+    // We need X^0, X^1,....X^255
+    for i in 0..256 {}
 }
 
 fn prep_sk() {
@@ -234,7 +314,8 @@ fn prep_sk() {
     for i in 0..pvw_params.ell {
         let d = bfv_sk.try_decrypt(&h_d[i]).unwrap();
         let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
-        dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
+        // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
+        dbg!(v[0]);
     }
 }
 
@@ -244,7 +325,10 @@ mod tests {
 
     #[test]
     fn trial() {
-        prep_sk();
+        // prep_sk();
+        // range_fn()
+        // trickle();
+        sq_mul();
     }
 
     #[test]
