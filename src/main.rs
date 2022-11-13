@@ -1,10 +1,16 @@
-use std::vec;
+use std::{fs::File, io::Write, path::Path, vec};
 
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, Multiplicator, Plaintext,
     RelinearizationKey, SecretKey,
 };
-use fhe_math::zq::Modulus;
+use fhe_math::rq::traits::TryConvertFrom;
+use fhe_math::rq::Representation;
+use fhe_math::{
+    rq::{Context, Poly},
+    zq::Modulus,
+};
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use fhe_util::sample_vec_cbd;
 use itertools::Itertools;
@@ -158,6 +164,13 @@ impl PVWSecretKey {
     }
 }
 
+fn read_range_coeffs(path: &str) {
+    let mut file = File::open(path).unwrap();
+    let mut buf = vec![0u64; 65536];
+    file.read_u64_into::<LittleEndian>(&mut buf).unwrap();
+    dbg!(buf);
+}
+
 fn precompute_range_coeffs() {
     // precompute coefficients
     //
@@ -165,32 +178,42 @@ fn precompute_range_coeffs() {
     // otherwise returns 0.
     let q = Modulus::new(65537).unwrap();
     let mut coeffs = vec![];
-    for i in 0..65537 {
+    for i in 1..65537 {
         let mut sum = 0;
+        dbg!(i);
         for a in 0..65537 {
             // f(a) * a.pow(65536 - i)
-            let v = {
-                if a < 32768 {
-                    0u64
-                } else {
-                    q.pow(a, 65536 - i)
-                }
-            };
-            sum = q.add(sum, v);
+            if a >= 32768 {
+                sum = q.add(sum, q.pow(a, 65536 - i));
+            }
         }
         coeffs.push(sum);
     }
+    let mut bug = [0u8; 65536 * 8];
+    LittleEndian::write_u64_into(&coeffs, &mut bug);
+    let mut f = File::create("params.bin").unwrap();
+    f.write_all(&bug);
 }
 
-fn sq_mul() {
+/// test fn that simulates powers_of_x on plaintext
+/// for debugging
+fn powers_of_x_poly() {
+    let ctx = Arc::new(Context::new(&[65537], 8).unwrap());
+
+    // Since we used SIMD for operating on multiple values,
+    // let's SIMD encode our input vector;
+    let input_vec = [353u64, 2322, 142, 313, 2312, 1, 21, 2131]; // all must evaluate to 0
+    let input = Poly::try_convert_from(&input_vec, &ctx, false, Representation::Ntt).unwrap();
+
     let degree = 8;
-    let input = 2u64;
-    let mut outputs = vec![0u64; degree];
+
+    let mut outputs = vec![Poly::zero(&ctx, Representation::PowerBasis); degree];
+    let mut calculated = vec![0usize; degree];
 
     for i in (0..degree + 1).rev() {
         let mut curr_deg = i;
-        let mut base = input;
-        let mut res = 1;
+        let mut base = input.clone();
+        let mut res = Poly::zero(&ctx, Representation::PowerBasis);
         let mut base_deg = 1;
         let mut res_deg = 0;
         while curr_deg > 0 {
@@ -198,21 +221,27 @@ fn sq_mul() {
                 curr_deg -= 1;
                 res_deg = res_deg + base_deg;
 
-                if outputs[res_deg - 1] != 0 {
-                    res = outputs[res_deg - 1];
+                if calculated[res_deg - 1] == 1 {
+                    res = outputs[res_deg - 1].clone();
                 } else {
-                    res = res * base;
-                    outputs[res_deg - 1] = res;
+                    if res_deg == base_deg {
+                        res = base.clone();
+                    } else {
+                        res = &res * &base;
+                    }
+                    outputs[res_deg - 1] = res.clone();
+                    calculated[res_deg - 1] = 1;
                 }
             } else {
                 curr_deg /= 2;
                 base_deg *= 2;
 
-                if outputs[base_deg - 1] != 0 {
-                    base = outputs[base_deg - 1];
+                if calculated[base_deg - 1] == 1 {
+                    base = outputs[base_deg - 1].clone();
                 } else {
-                    base = base * base;
-                    outputs[base_deg - 1] = base;
+                    base = &base * &base;
+                    outputs[base_deg - 1] = base.clone();
+                    calculated[base_deg - 1] = 1;
                 }
             }
         }
@@ -221,12 +250,73 @@ fn sq_mul() {
     dbg!(outputs);
 }
 
-fn range_fn() {
+fn powers_of_x(input: Ciphertext, multiplicator: Multiplicator, params: &Arc<BfvParameters>) {
+    let degree = 256;
+    let mut outputs = vec![Ciphertext::zero(&params); degree];
+    let mut calculated = vec![0usize; degree];
+
+    for i in (0..degree + 1).rev() {
+        let mut curr_deg = i;
+        let mut base = input.clone();
+        let mut res = Ciphertext::zero(&params);
+        let mut base_deg = 1;
+        let mut res_deg = 0;
+        while curr_deg > 0 {
+            if (curr_deg & 1) == 1 {
+                curr_deg -= 1;
+                res_deg = res_deg + base_deg;
+
+                if calculated[res_deg - 1] == 1 {
+                    res = outputs[res_deg - 1].clone();
+                } else {
+                    if res_deg == base_deg {
+                        res = base.clone();
+                    } else {
+                        res = multiplicator.multiply(&res.clone(), &base).unwrap();
+                    }
+                    outputs[res_deg - 1] = res.clone();
+                    calculated[res_deg - 1] = 1;
+                }
+            } else {
+                curr_deg /= 2;
+                base_deg *= 2;
+
+                if calculated[base_deg - 1] == 1 {
+                    base = outputs[base_deg - 1].clone();
+                } else {
+                    base = multiplicator.multiply(&base, &base).unwrap();
+                    outputs[base_deg - 1] = base.clone();
+                    calculated[base_deg - 1] = 1;
+                }
+            }
+        }
+    }
+
+    dbg!(outputs);
+}
+
+fn range_fn_poly() {
     // load coeffs
     let coeffs = vec![0u64; 65537];
 
+    const poly_degree: usize = 8;
+    let mut powers_of_x: Vec<Poly> = vec![];
+
+    let ctx = Arc::new(Context::new(&[65537], poly_degree).unwrap());
+
     // We need X^0, X^1,....X^255
-    for i in 0..256 {}
+    let total_sum = Poly::zero(&ctx, Representation::Ntt);
+    for i in 0..257 {
+        let mut sum = Poly::zero(&ctx, Representation::Ntt);
+        for j in 1..257 {
+            let c = coeffs[(i * 256) + (j - 1)];
+            let c_poly =
+                Poly::try_convert_from(&[c; poly_degree], &ctx, false, Representation::Ntt)
+                    .unwrap();
+            let scalar_product = &powers_of_x[j - 1] * &c_poly;
+            sum += &scalar_product;
+        }
+    }
 }
 
 fn prep_sk() {
@@ -311,12 +401,12 @@ fn prep_sk() {
         h_d[ell_i] = &h_b[ell_i] - &h_ska[ell_i];
     }
 
-    for i in 0..pvw_params.ell {
-        let d = bfv_sk.try_decrypt(&h_d[i]).unwrap();
-        let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
-        // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
-        dbg!(v[0]);
-    }
+    // for i in 0..pvw_params.ell {
+    //     let d = bfv_sk.try_decrypt(&h_d[i]).unwrap();
+    //     let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
+    //     // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
+    //     dbg!(v[0]);
+    // }
 }
 
 #[cfg(test)]
@@ -325,10 +415,13 @@ mod tests {
 
     #[test]
     fn trial() {
+        // powers_of_x_poly();
+        precompute_range_coeffs();
+        // read_range_coeffs("params.bin");
         // prep_sk();
         // range_fn()
         // trickle();
-        sq_mul();
+        // sq_mul();
     }
 
     #[test]
@@ -359,9 +452,3 @@ mod tests {
 fn main() {
     println!("Hello, world!");
 }
-
-// 1. Generate sk cts:
-//     Sk is of form ell * n and A is of form n * 1 and we need to perform
-//     Sk * A. So we need to create ct encrypting every element in Sk,
-//     so that Sk * A can be calculated for multiple encryptions
-//     using SIMD.

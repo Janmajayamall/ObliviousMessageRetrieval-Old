@@ -6,6 +6,7 @@ version = 3
 name = "OMR"
 version = "0.1.0"
 dependencies = [
+ "byteorder",
  "fhe",
  "fhe-math",
  "fhe-traits",
