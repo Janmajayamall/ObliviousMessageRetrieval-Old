@@ -164,11 +164,11 @@ impl PVWSecretKey {
     }
 }
 
-fn read_range_coeffs(path: &str) {
+fn read_range_coeffs(path: &str) -> Vec<u64> {
     let mut file = File::open(path).unwrap();
     let mut buf = vec![0u64; 65536];
     file.read_u64_into::<LittleEndian>(&mut buf).unwrap();
-    dbg!(buf);
+    buf
 }
 
 fn precompute_range_coeffs() {
@@ -197,16 +197,13 @@ fn precompute_range_coeffs() {
 
 /// test fn that simulates powers_of_x on plaintext
 /// for debugging
-fn powers_of_x_poly() {
-    let ctx = Arc::new(Context::new(&[65537], 8).unwrap());
-
-    // Since we used SIMD for operating on multiple values,
-    // let's SIMD encode our input vector;
-    let input_vec = [353u64, 2322, 142, 313, 2312, 1, 21, 2131]; // all must evaluate to 0
-    let input = Poly::try_convert_from(&input_vec, &ctx, false, Representation::Ntt).unwrap();
-
-    let degree = 8;
-
+fn powers_of_x_poly(
+    ctx: &Arc<Context>,
+    input: &Poly,
+    // k_degree
+    degree: usize,
+    poly_degree: usize,
+) -> Vec<Poly> {
     let mut outputs = vec![Poly::zero(&ctx, Representation::PowerBasis); degree];
     let mut calculated = vec![0usize; degree];
 
@@ -247,7 +244,7 @@ fn powers_of_x_poly() {
         }
     }
 
-    dbg!(outputs);
+    outputs
 }
 
 fn powers_of_x(input: Ciphertext, multiplicator: Multiplicator, params: &Arc<BfvParameters>) {
@@ -296,27 +293,44 @@ fn powers_of_x(input: Ciphertext, multiplicator: Multiplicator, params: &Arc<Bfv
 }
 
 fn range_fn_poly() {
-    // load coeffs
-    let coeffs = vec![0u64; 65537];
-
     const poly_degree: usize = 8;
-    let mut powers_of_x: Vec<Poly> = vec![];
-
     let ctx = Arc::new(Context::new(&[65537], poly_degree).unwrap());
 
-    // We need X^0, X^1,....X^255
-    let total_sum = Poly::zero(&ctx, Representation::Ntt);
-    for i in 0..257 {
+    // Since we used SIMD for operating on multiple values,
+    // let's SIMD encode our input vector;
+    let input_vec = [353u64, 32767, 142, 313, 2312, 1, 21, 38000]; // all must evaluate to 0
+    let input = Poly::try_convert_from(&input_vec, &ctx, false, Representation::Ntt).unwrap();
+
+    // read coeffs
+    let coeffs = read_range_coeffs("params.bin");
+    let k_degree = 256;
+    let mut k_powers_of_x: Vec<Poly> = powers_of_x_poly(&ctx, &input, k_degree, poly_degree);
+    // M = x^256
+    let mut k_powers_of_m: Vec<Poly> =
+        powers_of_x_poly(&ctx, &k_powers_of_x[255], k_degree, poly_degree);
+
+    let mut total_sum = Poly::zero(&ctx, Representation::Ntt);
+    for i in 0..256 {
         let mut sum = Poly::zero(&ctx, Representation::Ntt);
         for j in 1..257 {
             let c = coeffs[(i * 256) + (j - 1)];
             let c_poly =
                 Poly::try_convert_from(&[c; poly_degree], &ctx, false, Representation::Ntt)
                     .unwrap();
-            let scalar_product = &powers_of_x[j - 1] * &c_poly;
+            let scalar_product = &k_powers_of_x[j - 1] * &c_poly;
             sum += &scalar_product;
         }
+
+        if i == 0 {
+            total_sum = sum;
+        } else {
+            let p = &k_powers_of_m[i - 1] * &sum;
+            total_sum += &p;
+        }
     }
+    total_sum = -total_sum;
+
+    dbg!(total_sum);
 }
 
 fn prep_sk() {
@@ -415,8 +429,9 @@ mod tests {
 
     #[test]
     fn trial() {
+        range_fn_poly();
         // powers_of_x_poly();
-        precompute_range_coeffs();
+        // precompute_range_coeffs();
         // read_range_coeffs("params.bin");
         // prep_sk();
         // range_fn()
