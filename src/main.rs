@@ -247,8 +247,12 @@ fn powers_of_x_poly(
     outputs
 }
 
-fn powers_of_x(input: Ciphertext, multiplicator: Multiplicator, params: &Arc<BfvParameters>) {
-    let degree = 256;
+fn powers_of_x(
+    input: &Ciphertext,
+    degree: usize,
+    multiplicator: &Multiplicator,
+    params: &Arc<BfvParameters>,
+) -> Vec<Ciphertext> {
     let mut outputs = vec![Ciphertext::zero(&params); degree];
     let mut calculated = vec![0usize; degree];
 
@@ -289,7 +293,7 @@ fn powers_of_x(input: Ciphertext, multiplicator: Multiplicator, params: &Arc<Bfv
         }
     }
 
-    dbg!(outputs);
+    outputs
 }
 
 fn range_fn_poly() {
@@ -331,6 +335,43 @@ fn range_fn_poly() {
     total_sum = -total_sum;
 
     dbg!(total_sum);
+}
+
+fn range_fn(
+    bfv_params: &Arc<BfvParameters>,
+    input: &Ciphertext,
+    rlk: &RelinearizationKey,
+) -> Ciphertext {
+    let multiplicator = Multiplicator::default(&rlk).unwrap();
+
+    let k_powers_of_x = powers_of_x(input, 256, &multiplicator, bfv_params);
+    // m = x^256
+    let k_powers_of_m = powers_of_x(&k_powers_of_x[255], 255, &multiplicator, bfv_params);
+
+    let coeffs = read_range_coeffs("params.bin");
+
+    let mut total = Ciphertext::zero(bfv_params);
+    for i in 0..256 {
+        let mut sum = Ciphertext::zero(bfv_params);
+        for j in 1..257 {
+            let c = coeffs[(i * 256) + (j - 1)];
+            let c_pt = Plaintext::try_encode(&[c], Encoding::simd(), bfv_params).unwrap();
+            let scalar_product = &k_powers_of_x[j - 1] * &c_pt;
+            sum += &scalar_product;
+        }
+
+        if i != 0 {
+            // mul and add
+            let p = multiplicator.multiply(&k_powers_of_m[i - 1], &sum).unwrap();
+            total += &p
+        } else {
+            total = sum;
+        }
+    }
+
+    total = -total;
+
+    total
 }
 
 fn prep_sk() {
@@ -415,28 +456,66 @@ fn prep_sk() {
         h_d[ell_i] = &h_b[ell_i] - &h_ska[ell_i];
     }
 
-    // for i in 0..pvw_params.ell {
-    //     let d = bfv_sk.try_decrypt(&h_d[i]).unwrap();
-    //     let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
-    //     // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
-    //     dbg!(v[0]);
-    // }
+    for i in 0..pvw_params.ell {
+        let d_ct = range_fn(&bfv_params, &h_d[i], &rlk);
+        let d = bfv_sk.try_decrypt(&d_ct).unwrap();
+        let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
+        dbg!(v);
+        // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
+        // dbg!(v[0]);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use itertools::izip;
+
     use super::*;
 
     #[test]
     fn trial() {
-        range_fn_poly();
+        // range_fn_poly();
         // powers_of_x_poly();
         // precompute_range_coeffs();
         // read_range_coeffs("params.bin");
-        // prep_sk();
+        prep_sk();
         // range_fn()
         // trickle();
         // sq_mul();
+    }
+
+    #[test]
+    fn power_of_x() {
+        let mut rng = thread_rng();
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(8)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&vec![62usize; 3])
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+        let t_ctx = Arc::new(Context::new(&[65537], 8).unwrap());
+
+        let X = vec![2u64, 3, 4, 3, 4, 1, 3, 4];
+        let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
+        let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
+        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+
+        let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
+        let multiplicator = Multiplicator::default(&rlk).unwrap();
+
+        let k_degree = 65;
+
+        let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree, 8);
+        let powers_ct = powers_of_x(&ct, k_degree, &multiplicator, &bfv_params);
+
+        izip!(powers.iter(), powers_ct.iter()).for_each(|(p, ct)| {
+            let pt = bfv_sk.try_decrypt(ct).unwrap();
+            let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+            assert_eq!(pt, p.coefficients().to_slice().unwrap());
+        })
     }
 
     #[test]
