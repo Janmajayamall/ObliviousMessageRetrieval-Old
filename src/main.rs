@@ -1,3 +1,5 @@
+use core::num;
+use std::collections::HashMap;
 use std::{fs::File, io::Write, path::Path, vec};
 
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
@@ -12,7 +14,7 @@ use fhe_math::{
     zq::Modulus,
 };
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
-use fhe_util::sample_vec_cbd;
+use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use std::sync::Arc;
@@ -207,6 +209,8 @@ fn powers_of_x_poly(
     let mut outputs = vec![Poly::zero(&ctx, Representation::PowerBasis); degree];
     let mut calculated = vec![0usize; degree];
 
+    let mut num_mod = vec![0usize; degree];
+
     for i in (0..degree + 1).rev() {
         let mut curr_deg = i;
         let mut base = input.clone();
@@ -224,7 +228,15 @@ fn powers_of_x_poly(
                     if res_deg == base_deg {
                         res = base.clone();
                     } else {
+                        num_mod[res_deg - 1] = num_mod[base_deg - 1];
                         res = &res * &base;
+
+                        while num_mod[res_deg - 1]
+                            < ((res_deg as f32).log2() / 2f32).ceil() as usize
+                        {
+                            num_mod[res_deg - 1] += 1;
+                        }
+                        // dbg!(num_mod[base_deg - 1], res_deg);
                     }
                     outputs[res_deg - 1] = res.clone();
                     calculated[res_deg - 1] = 1;
@@ -236,14 +248,22 @@ fn powers_of_x_poly(
                 if calculated[base_deg - 1] == 1 {
                     base = outputs[base_deg - 1].clone();
                 } else {
+                    num_mod[base_deg - 1] = num_mod[base_deg / 2 - 1];
+
                     base = &base * &base;
                     outputs[base_deg - 1] = base.clone();
                     calculated[base_deg - 1] = 1;
+
+                    while num_mod[base_deg - 1] < ((base_deg as f32).log2() / 2f32).ceil() as usize
+                    {
+                        num_mod[base_deg - 1] += 1;
+                    }
+                    // dbg!(num_mod[base_deg - 1], base_deg);
                 }
             }
         }
     }
-
+    // dbg!(num_mod);
     outputs
 }
 
@@ -252,9 +272,11 @@ fn powers_of_x(
     degree: usize,
     multiplicator: &Multiplicator,
     params: &Arc<BfvParameters>,
+    rlk_keys: &HashMap<usize, RelinearizationKey>,
 ) -> Vec<Ciphertext> {
     let mut outputs = vec![Ciphertext::zero(&params); degree];
     let mut calculated = vec![0usize; degree];
+    let mut num_mod = vec![0usize; degree];
 
     for i in (0..degree + 1).rev() {
         let mut curr_deg = i;
@@ -262,10 +284,13 @@ fn powers_of_x(
         let mut res = Ciphertext::zero(&params);
         let mut base_deg = 1;
         let mut res_deg = 0;
+
         while curr_deg > 0 {
             if (curr_deg & 1) == 1 {
                 curr_deg -= 1;
-                res_deg = res_deg + base_deg;
+
+                let prev_res_deg = res_deg;
+                res_deg += base_deg;
 
                 if calculated[res_deg - 1] == 1 {
                     res = outputs[res_deg - 1].clone();
@@ -273,7 +298,22 @@ fn powers_of_x(
                     if res_deg == base_deg {
                         res = base.clone();
                     } else {
-                        res = multiplicator.multiply(&res.clone(), &base).unwrap();
+                        // make modulus level at `res_deg` equal to `res`
+                        num_mod[res_deg - 1] = num_mod[prev_res_deg - 1];
+                        while num_mod[res_deg - 1] < num_mod[base_deg - 1] {
+                            res.mod_switch_to_next_level();
+                            num_mod[res_deg - 1] += 1;
+                        }
+                        res = &res * &base;
+                        let rlk_level = rlk_keys.get(&num_mod[base_deg - 1]).unwrap();
+                        rlk_level.relinearizes(&mut res).unwrap();
+
+                        while num_mod[res_deg - 1]
+                            < ((res_deg as f32).log2() / 2f32).ceil() as usize
+                        {
+                            res.mod_switch_to_next_level();
+                            num_mod[res_deg - 1] += 1;
+                        }
                     }
                     outputs[res_deg - 1] = res.clone();
                     calculated[res_deg - 1] = 1;
@@ -285,7 +325,17 @@ fn powers_of_x(
                 if calculated[base_deg - 1] == 1 {
                     base = outputs[base_deg - 1].clone();
                 } else {
-                    base = multiplicator.multiply(&base, &base).unwrap();
+                    num_mod[base_deg - 1] = num_mod[base_deg / 2 - 1];
+                    base = &base * &base;
+
+                    let rlk_level = rlk_keys.get(&num_mod[base_deg - 1]).unwrap();
+                    rlk_level.relinearizes(&mut base).unwrap();
+
+                    while num_mod[base_deg - 1] < ((base_deg as f32).log2() / 2f32).ceil() as usize
+                    {
+                        base.mod_switch_to_next_level();
+                        num_mod[base_deg - 1] += 1;
+                    }
                     outputs[base_deg - 1] = base.clone();
                     calculated[base_deg - 1] = 1;
                 }
@@ -340,13 +390,19 @@ fn range_fn_poly() {
 fn range_fn(
     bfv_params: &Arc<BfvParameters>,
     input: &Ciphertext,
-    rlk: &RelinearizationKey,
+    rlk_keys: &HashMap<usize, RelinearizationKey>,
 ) -> Ciphertext {
-    let multiplicator = Multiplicator::default(&rlk).unwrap();
+    let multiplicator = Multiplicator::default(&rlk_keys.get(&0).unwrap()).unwrap();
 
-    let k_powers_of_x = powers_of_x(input, 256, &multiplicator, bfv_params);
+    let k_powers_of_x = powers_of_x(input, 256, &multiplicator, bfv_params, rlk_keys);
     // m = x^256
-    let k_powers_of_m = powers_of_x(&k_powers_of_x[255], 255, &multiplicator, bfv_params);
+    let k_powers_of_m = powers_of_x(
+        &k_powers_of_x[255],
+        255,
+        &multiplicator,
+        bfv_params,
+        rlk_keys,
+    );
 
     let coeffs = read_range_coeffs("params.bin");
 
@@ -456,14 +512,14 @@ fn prep_sk() {
         h_d[ell_i] = &h_b[ell_i] - &h_ska[ell_i];
     }
 
-    for i in 0..pvw_params.ell {
-        let d_ct = range_fn(&bfv_params, &h_d[i], &rlk);
-        let d = bfv_sk.try_decrypt(&d_ct).unwrap();
-        let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
-        dbg!(v);
-        // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
-        // dbg!(v[0]);
-    }
+    // for i in 0..pvw_params.ell {
+    //     let d_ct = range_fn(&bfv_params, &h_d[i], &rlk);
+    //     let d = bfv_sk.try_decrypt(&d_ct).unwrap();
+    //     let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
+    //     dbg!(v);
+    //     // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
+    //     // dbg!(v[0]);
+    // }
 }
 
 #[cfg(test)]
@@ -491,12 +547,18 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(8)
                 .set_plaintext_modulus(65537)
-                .set_moduli_sizes(&vec![62usize; 3])
+                .set_moduli_sizes(&vec![62usize; 8])
                 .build()
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
         let t_ctx = Arc::new(Context::new(&[65537], 8).unwrap());
+
+        let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
+        for i in 0..bfv_params.max_level() {
+            let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
+            rlk_keys.insert(i, rlk);
+        }
 
         let X = vec![2u64, 3, 4, 3, 4, 1, 3, 4];
         let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
@@ -506,10 +568,10 @@ mod tests {
         let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
         let multiplicator = Multiplicator::default(&rlk).unwrap();
 
-        let k_degree = 65;
+        let k_degree = 256;
 
         let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree, 8);
-        let powers_ct = powers_of_x(&ct, k_degree, &multiplicator, &bfv_params);
+        let powers_ct = powers_of_x(&ct, k_degree, &multiplicator, &bfv_params, &rlk_keys);
 
         izip!(powers.iter(), powers_ct.iter()).for_each(|(p, ct)| {
             let pt = bfv_sk.try_decrypt(ct).unwrap();
