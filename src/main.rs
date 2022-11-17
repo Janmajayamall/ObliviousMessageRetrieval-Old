@@ -354,6 +354,27 @@ fn decrypt_pvw(
     d
 }
 
+fn pv_compress(bfv_params: &Arc<BfvParameters>, pv: &Vec<Ciphertext>, level: usize) -> Ciphertext {
+    let mut compressed_pv = Ciphertext::zero(&bfv_params);
+    let log_t = 64 - bfv_params.plaintext().leading_zeros();
+    for i in 0..pv.len() {
+        let index = (i as f32 / log_t as f32).floor() as usize;
+        let bit_index = (i as u32) % log_t;
+
+        let mut select = vec![0u64; bfv_params.degree()];
+        select[index] = 2u64.pow(bit_index);
+        let select_pt =
+            Plaintext::try_encode(&select, Encoding::simd_at_level(level), &bfv_params).unwrap();
+
+        // pv_i * select_i
+        let product = &pv[i] * &select_pt;
+
+        compressed_pv = &compressed_pv + &product;
+    }
+
+    compressed_pv
+}
+
 fn run() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
@@ -434,6 +455,8 @@ fn run() {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hash;
+
     use itertools::izip;
 
     use crate::utils::rot_to_exponent;
@@ -559,9 +582,10 @@ mod tests {
     #[test]
     fn test_pv_unpack() {
         let mut rng = thread_rng();
+        let degree = 8;
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
-                .set_degree(8)
+                .set_degree(degree)
                 .set_plaintext_modulus(65537)
                 .set_moduli_sizes(&vec![62usize; 3])
                 .build()
@@ -569,7 +593,7 @@ mod tests {
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        // rotates left by 1
+        // rotation keys
         let mut rot_keys = HashMap::<usize, GaloisKey>::new();
         let mut i = 1;
         while i < bfv_params.degree() / 2 {
@@ -586,16 +610,94 @@ mod tests {
             GaloisKey::new(&bfv_sk, bfv_params.degree() * 2 - 1, 0, 0, &mut rng).unwrap(),
         );
 
-        let pt =
-            Plaintext::try_encode(&[3u64, 12, 4, 2, 7], Encoding::simd(), &bfv_params).unwrap();
+        let distr = Uniform::new(0u64, 65537);
+        let values = distr.sample_iter(rng.clone()).take(degree).collect_vec();
+        let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         let unpacked_cts = pv_unpack(&bfv_params, &rot_keys, &ct);
-        unpacked_cts[..5].iter().for_each(|u_ct| {
+        unpacked_cts.iter().enumerate().for_each(|(index, u_ct)| {
             let pt = bfv_sk.try_decrypt(&u_ct).unwrap();
             let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
-            println!("{:?}", v);
+            assert_eq!(v, vec![values[index]; degree]);
         });
+    }
+
+    #[test]
+    fn test_pv_compress() {
+        let mut rng = thread_rng();
+        let degree = 8;
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&vec![62usize; 8])
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+        let mut rot_keys = HashMap::<usize, GaloisKey>::new();
+        let mut i = 1;
+        while i < degree / 2 {
+            let exponent = rot_to_exponent(i as u64, &bfv_params);
+            rot_keys.insert(
+                i,
+                GaloisKey::new(&bfv_sk, exponent, 0, 0, &mut rng).unwrap(),
+            );
+            i *= 2;
+        }
+        rot_keys.insert(
+            degree * 2 - 1,
+            GaloisKey::new(&bfv_sk, degree * 2 - 1, 0, 0, &mut rng).unwrap(),
+        );
+
+        // Packing capacity in bits: log_t * D
+        // so let's try packing entire ct with pv
+        // values. Note that we will need log_t pertinency
+        // vector ciphertexts to fully cover a single
+        // compressed pv ct.
+        // let ct_capacity = (degree as u32) * (16);
+        let ct_capacity = 5 * 16;
+
+        // generate log_t * D {0,1} values
+        let pv = Uniform::new(0u64, 2)
+            .sample_iter(rng.clone())
+            .take(ct_capacity as usize)
+            .collect_vec();
+
+        // calculate log_t * D enc({0,1}) values
+        let pv_cts = pv
+            .chunks(bfv_params.degree())
+            .flat_map(|vals| {
+                let pt = Plaintext::try_encode(vals, Encoding::simd(), &bfv_params).unwrap();
+                let pv_ct = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+
+                // unpack
+                pv_unpack(&bfv_params, &rot_keys, &pv_ct)
+            })
+            .collect_vec();
+
+        let pv_compressed = pv_compress(&bfv_params, &pv_cts, 0);
+        let pv_compressed = bfv_sk.try_decrypt(&pv_compressed).unwrap();
+        let mut pv_compressed = Vec::<u64>::try_decode(&pv_compressed, Encoding::simd()).unwrap();
+        dbg!(&pv_compressed);
+        let final_vals = pv_compressed
+            .iter_mut()
+            .flat_map(|v| {
+                let mut bits = vec![];
+                for _ in 0..17 {
+                    bits.push(*v & 1);
+                    *v >>= 1;
+                }
+                bits
+            })
+            .collect_vec();
+
+        println!("{:?}", final_vals[..pv.len()].to_vec());
+        println!("{:?}", pv);
+
+        assert_eq!(final_vals[..pv.len()], pv);
     }
 }
 
