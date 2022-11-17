@@ -1,11 +1,8 @@
-use core::num;
-use std::collections::HashMap;
-use std::{fs::File, io::Write, path::Path, vec};
-
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use core::num;
 use fhe::bfv::{
-    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, Multiplicator, Plaintext,
-    RelinearizationKey, SecretKey,
+    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
+    Plaintext, RelinearizationKey, SecretKey,
 };
 use fhe_math::rq::traits::TryConvertFrom;
 use fhe_math::rq::Representation;
@@ -17,7 +14,9 @@ use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::{fs::File, io::Write, path::Path, vec};
 
 mod pvw;
 use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
@@ -227,11 +226,15 @@ fn range_fn(
     let coeffs = read_range_coeffs("params.bin");
 
     let mut total = Ciphertext::zero(bfv_params);
+    let mut count = 0;
     for i in 0..256 {
         let mut sum: Ciphertext = Ciphertext::zero(bfv_params);
         let mut flag = false;
         for j in 1..257 {
             let c = coeffs[(i * 256) + (j - 1)];
+            if c < 1 {
+                count += 1;
+            }
             let c_pt = Plaintext::try_encode(
                 &vec![c; bfv_params.degree()],
                 Encoding::simd_at_level(4),
@@ -264,11 +267,55 @@ fn range_fn(
             total = sum;
         }
     }
-
+    dbg!(count);
     total = -total;
     // total.mod_switch_to_next_level();
 
     total
+}
+
+// decrypt pvw cts
+fn decrypt_pvw(
+    bfv_params: &Arc<BfvParameters>,
+    pvw_params: &Arc<PVWParameters>,
+    ct_pvw_sk: &Vec<Ciphertext>,
+    rotation_key: GaloisKey,
+    clues: Vec<PVWCiphertext>,
+) {
+    debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
+
+    // encrypts sk * a for N clues
+    let mut sk_a = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
+    for ell_index in 0..pvw_params.ell {
+        let mut sk = ct_pvw_sk[ell_index].clone();
+        for i in 0..pvw_params.n {
+            let mut values = vec![0u64; bfv_params.degree()];
+            for j in 0..clues.len() {
+                let index = (i + j) % pvw_params.n;
+                values[i] = clues[j].a[index];
+            }
+
+            let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
+            let product = &sk * &values_pt;
+            sk_a[ell_index] = &sk_a[ell_index] + &product;
+
+            // rotate left by 1
+            sk = rotation_key.relinearize(&sk).unwrap();
+        }
+    }
+
+    // d = b-sa
+    let mut d = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
+    for ell_index in 0..pvw_params.ell {
+        // we assume that N <= D
+        let mut b_ell = vec![0u64; bfv_params.degree()];
+        for i in 0..clues.len() {
+            b_ell[i] = clues[i].b[ell_index];
+        }
+        let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
+
+        d[ell_index] = &(-&sk_a[ell_index]) + &b_ell;
+    }
 }
 
 fn prep_sk() {
