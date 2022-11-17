@@ -1,8 +1,9 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use fhe::bfv::BfvParameters;
 use fhe_math::zq::Modulus;
 use std::fs::File;
 use std::io::Write;
-
+use std::sync::Arc;
 pub fn read_range_coeffs(path: &str) -> Vec<u64> {
     let mut file = File::open(path).unwrap();
     let mut buf = vec![0u64; 65536];
@@ -32,4 +33,9 @@ pub fn precompute_range_coeffs() {
     LittleEndian::write_u64_into(&coeffs, &mut bug);
     let mut f = File::create("params.bin").unwrap();
     f.write_all(&bug);
+}
+
+pub fn rot_to_exponent(rot_by: u64, bfv_params: &Arc<BfvParameters>) -> usize {
+    let q = Modulus::new(2 * bfv_params.degree() as u64).unwrap();
+    q.pow(3, rot_by) as usize
 }

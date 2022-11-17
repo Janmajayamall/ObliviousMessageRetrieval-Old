@@ -274,6 +274,40 @@ fn range_fn(
     total
 }
 
+fn pv_unpack(
+    bfv_params: &Arc<BfvParameters>,
+    rot_keys: &HashMap<usize, GaloisKey>,
+    pv_ct: &Ciphertext,
+) -> Vec<Ciphertext> {
+    let mut selected_vals = vec![Ciphertext::zero(&bfv_params); bfv_params.degree()];
+    for i in 0..bfv_params.degree() {
+        let mut select = vec![0u64; bfv_params.degree()];
+        select[i] = 1;
+        let pt = Plaintext::try_encode(&select, Encoding::simd(), bfv_params).unwrap();
+        selected_vals[i] = pv_ct * &pt;
+    }
+
+    let mut pv = vec![Ciphertext::zero(&bfv_params); bfv_params.degree()];
+    for index in 0..selected_vals.len() {
+        let mut i = 1usize;
+        let mut res = selected_vals[index].clone();
+        while i < bfv_params.degree() / 2 {
+            res = &res + &rot_keys.get(&i).unwrap().relinearize(&res).unwrap();
+            i *= 2;
+        }
+        res = &res
+            + &rot_keys
+                .get(&(bfv_params.degree() * 2 - 1))
+                .unwrap()
+                .relinearize(&res)
+                .unwrap();
+
+        pv[index] = res;
+    }
+
+    pv
+}
+
 // decrypt pvw cts
 fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
@@ -281,7 +315,7 @@ fn decrypt_pvw(
     ct_pvw_sk: &Vec<Ciphertext>,
     rotation_key: GaloisKey,
     clues: Vec<PVWCiphertext>,
-) {
+) -> Vec<Ciphertext> {
     debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
 
     // encrypts sk * a for N clues
@@ -292,7 +326,7 @@ fn decrypt_pvw(
             let mut values = vec![0u64; bfv_params.degree()];
             for j in 0..clues.len() {
                 let index = (i + j) % pvw_params.n;
-                values[i] = clues[j].a[index];
+                values[j] = clues[j].a[index];
             }
 
             let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
@@ -316,89 +350,77 @@ fn decrypt_pvw(
 
         d[ell_index] = &(-&sk_a[ell_index]) + &b_ell;
     }
+
+    d
 }
 
-fn prep_sk() {
+fn run() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
-            .set_degree(8)
+            .set_degree(1024)
             .set_plaintext_modulus(65537)
-            .set_moduli_sizes(&vec![62usize; 3])
+            .set_moduli_sizes(&vec![62usize; 14])
             .build()
             .unwrap(),
     );
     let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-    let pvw_params = PVWParameters {
+    let pvw_params = Arc::new(PVWParameters {
         n: 450,
         m: 100,
         ell: 4,
         variance: 2,
         q: 65537,
-    };
+    });
     let pvw_sk = PVWSecretKey::gen_sk(&pvw_params);
     let pvw_pk = pvw_sk.public_key();
 
-    let mut h_pvw_sk = vec![vec![Ciphertext::zero(&bfv_params); pvw_params.n]; pvw_params.ell];
+    // gen clues
+    let N = 2;
+    let mut clues = vec![];
+    for i in 0..N {
+        clues.push(pvw_pk.encrypt(vec![0, 1, 1, 0]));
+    }
+
+    let mut ct_pvw_sk = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
     for l_i in 0..pvw_params.ell {
-        for n_i in 0..pvw_params.n {
-            let element = pvw_sk.key[l_i][n_i];
-            let element_arr = vec![element; bfv_params.degree()];
-            let pt = Plaintext::try_encode(&element_arr, Encoding::simd(), &bfv_params).unwrap();
-            let ct = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
-            h_pvw_sk[l_i][n_i] = ct;
+        let mut values = vec![0u64; bfv_params.degree()];
+        // make sure `n` < `D` (tbh should be way smaller)
+        for n_i in 0..bfv_params.degree() {
+            values[n_i] = pvw_sk.key[l_i][n_i % pvw_params.n];
         }
+        let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
+        ct_pvw_sk[l_i] = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
     }
 
-    // generate 2 PVW cts
-    let p_c1 = pvw_pk.encrypt(vec![1, 0, 0, 0]);
-    let p_c2 = pvw_pk.encrypt(vec![1, 1, 0, 1]);
+    let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
 
-    // Encode pvw cts into simd vecs.
-    // Each SIMD pt consists of nth `a` element
-    // al pvw cts
-    let mut h_a = vec![Ciphertext::zero(&bfv_params); pvw_params.n];
-    for n_i in 0..pvw_params.n {
-        let pt = Plaintext::try_encode(&[p_c1.a[n_i], p_c2.a[n_i]], Encoding::simd(), &bfv_params)
-            .unwrap();
-        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
-        h_a[n_i] = ct;
+    let d = decrypt_pvw(&bfv_params, &pvw_params, &ct_pvw_sk, top_rot_key, clues);
+
+    // relinearization keys at all levels
+    let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
+    for i in 0..bfv_params.max_level() {
+        let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
+        rlk_keys.insert(i, rlk);
     }
 
-    let mut h_b = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
-    for ell_i in 0..pvw_params.ell {
-        let pt = Plaintext::try_encode(
-            &[p_c1.b[ell_i], p_c2.b[ell_i]],
-            Encoding::simd(),
-            &bfv_params,
-        )
-        .unwrap();
-        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
-        h_b[ell_i] = ct;
+    let mut d_checked = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
+    for i in 0..pvw_params.ell {
+        d_checked[i] = range_fn(&bfv_params, &d[i], &rlk_keys);
     }
 
-    let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
-    let multiplicator = Multiplicator::default(&rlk).unwrap();
-
-    // sk * a (homomorphically)
-    let mut h_ska = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
-    for el_i in 0..pvw_params.ell {
-        let mut sum = Ciphertext::zero(&bfv_params);
-        for n_i in 0..pvw_params.n {
-            let product = multiplicator
-                .multiply(&h_pvw_sk[el_i][n_i], &h_a[n_i])
-                .unwrap();
-            sum = &sum + &product;
-        }
-        h_ska[el_i] = sum;
+    for i in 0..pvw_params.ell {
+        let d_el = bfv_sk.try_decrypt(&d_checked[i]).unwrap();
+        let d_el = Vec::<u64>::try_decode(&d_el, Encoding::simd()).unwrap();
+        // let v = d_el
+        //     .iter()
+        //     .map(|v| (*v >= pvw_params.q / 2) as u64)
+        //     .collect_vec();
+        dbg!(&d_el[..20]);
     }
 
-    // now perform b-sa
-    let mut h_d = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
-    for ell_i in 0..pvw_params.ell {
-        h_d[ell_i] = &h_b[ell_i] - &h_ska[ell_i];
-    }
+    // let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
 
     // for i in 0..pvw_params.ell {
     //     let d_ct = range_fn(&bfv_params, &h_d[i], &rlk);
@@ -414,18 +436,49 @@ fn prep_sk() {
 mod tests {
     use itertools::izip;
 
+    use crate::utils::rot_to_exponent;
+
     use super::*;
 
     #[test]
-    fn trial() {
-        // range_fn_poly();
-        // powers_of_x_poly();
-        // precompute_range_coeffs();
-        // read_range_coeffs("params.bin");
-        // prep_sk();
-        // range_fn();
-        // trickle();
-        // sq_mul();
+    fn test_run() {
+        run();
+    }
+
+    #[test]
+    fn rotations() {
+        let degree = 8;
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&[62; 3])
+                .build()
+                .unwrap(),
+        );
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let mut t = vec![0u64; degree];
+        t[0] = 121;
+        t[3] = 623;
+
+        let pt = Plaintext::try_encode(&t, Encoding::simd(), &params).unwrap();
+        let ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+
+        let rot_key = GaloisKey::new(&sk, 3, 0, 0, &mut rng).unwrap();
+
+        let mut rotated_ct = ct.clone();
+        // rotated_ct = rot_key.relinearize(&rotated_ct).unwrap();
+        for i in 0..1 {
+            rotated_ct = rot_key.relinearize(&rotated_ct).unwrap();
+        }
+
+        let rotated_pt = sk.try_decrypt(&rotated_ct).unwrap();
+        println!(
+            "{:?}",
+            Vec::<u64>::try_decode(&rotated_pt, Encoding::simd()).unwrap()
+        );
     }
 
     #[test]
@@ -501,6 +554,48 @@ mod tests {
             let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
             assert_eq!(pt, p.coefficients().to_slice().unwrap());
         })
+    }
+
+    #[test]
+    fn test_pv_unpack() {
+        let mut rng = thread_rng();
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(8)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&vec![62usize; 3])
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+        // rotates left by 1
+        let mut rot_keys = HashMap::<usize, GaloisKey>::new();
+        let mut i = 1;
+        while i < bfv_params.degree() / 2 {
+            let exponent = rot_to_exponent(i as u64, &bfv_params);
+            rot_keys.insert(
+                i,
+                GaloisKey::new(&bfv_sk, exponent, 0, 0, &mut rng).unwrap(),
+            );
+            i *= 2;
+        }
+
+        rot_keys.insert(
+            bfv_params.degree() * 2 - 1,
+            GaloisKey::new(&bfv_sk, bfv_params.degree() * 2 - 1, 0, 0, &mut rng).unwrap(),
+        );
+
+        let pt =
+            Plaintext::try_encode(&[3u64, 12, 4, 2, 7], Encoding::simd(), &bfv_params).unwrap();
+        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+
+        let unpacked_cts = pv_unpack(&bfv_params, &rot_keys, &ct);
+        unpacked_cts[..5].iter().for_each(|u_ct| {
+            let pt = bfv_sk.try_decrypt(&u_ct).unwrap();
+            let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+            println!("{:?}", v);
+        });
     }
 }
 

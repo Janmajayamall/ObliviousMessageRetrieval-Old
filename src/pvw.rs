@@ -40,6 +40,8 @@ pub struct PublicKey {
 
 impl PublicKey {
     pub fn encrypt(&self, m: Vec<u64>) -> PVWCiphertext {
+        debug_assert!(m.len() == self.params.ell);
+
         let mut rng = thread_rng();
         let q = Modulus::new(self.params.q).unwrap();
         let t = m
