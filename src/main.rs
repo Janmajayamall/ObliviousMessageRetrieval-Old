@@ -14,6 +14,7 @@ use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+use rand::{Rng, RngCore};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{fs::File, io::Write, path::Path, vec};
@@ -356,7 +357,7 @@ fn decrypt_pvw(
 
 fn pv_compress(bfv_params: &Arc<BfvParameters>, pv: &Vec<Ciphertext>, level: usize) -> Ciphertext {
     let mut compressed_pv = Ciphertext::zero(&bfv_params);
-    let log_t = 64 - bfv_params.plaintext().leading_zeros();
+    let log_t = 64 - bfv_params.plaintext().leading_zeros() - 1;
     for i in 0..pv.len() {
         let index = (i as f32 / log_t as f32).floor() as usize;
         let bit_index = (i as u32) % log_t;
@@ -373,6 +374,141 @@ fn pv_compress(bfv_params: &Arc<BfvParameters>, pv: &Vec<Ciphertext>, level: usi
     }
 
     compressed_pv
+}
+
+fn assign_buckets(
+    no_of_buckets: usize,
+    gamma: usize,
+    q_mod: u64,
+    N: usize,
+) -> (Vec<Vec<usize>>, Vec<Vec<u64>>) {
+    let rng = thread_rng();
+
+    let mut buckets = vec![vec![]; N];
+    let mut weights = vec![vec![]; N];
+
+    for row_index in 0..N {
+        while buckets[row_index].len() != gamma {
+            // random bucket
+            let bucket = rng.sample(Uniform::new(0, no_of_buckets));
+
+            // avoid duplicate buckets
+            if !buckets[row_index].contains(&bucket) {
+                buckets[row_index].push(bucket);
+
+                // Assign weight
+                // Weight cannot be zero
+                let weight = rng.sample(Uniform::new(1u64, q_mod));
+                weights[row_index].push(weight);
+            }
+        }
+    }
+
+    (buckets, weights)
+}
+
+/// Returns bucket assignments corresponding to each
+/// pertinent payload scaled by corresponding weight
+///
+/// That is, for each payload, `PV[i] * a`, where `a` encodes
+/// `payload * weight` at respective bucket slots.
+fn pv_weights(
+    assigned_buckets: Vec<Vec<usize>>,
+    assigned_weights: Vec<Vec<u64>>,
+    pv: &Vec<Ciphertext>,
+    payloads: Vec<Vec<u64>>,
+    payload_size: usize,
+    bfv_params: &Arc<BfvParameters>,
+    N: usize,
+    gamma: usize,
+) -> Vec<Ciphertext> {
+    let q_mod = bfv_params.plaintext();
+    let mut products = vec![Ciphertext::zero(&bfv_params); N];
+    for row_index in 0..N {
+        let mut pt = vec![0u64; bfv_params.degree()];
+        for i in 0..gamma {
+            // think of single bucket as spanning across `payload_size`
+            // no. of rows of plaintext vector
+            let bucket = assigned_buckets[row_index][i] * payload_size;
+
+            for chunk_index in 0..payload_size {
+                // payload chunk * weight
+                pt[bucket + chunk_index] +=
+                    (payloads[row_index][chunk_index] * assigned_weights[row_index][i]) % q_mod;
+            }
+        }
+
+        let pt = Plaintext::try_encode(&pt, Encoding::simd(), &bfv_params).unwrap();
+        let product = &pv[row_index] * &pt;
+        products[row_index] = product;
+    }
+
+    products
+}
+
+fn finalise_combinations(
+    pv_weights: Vec<Ciphertext>,
+    bfv_params: &Arc<BfvParameters>,
+) -> Ciphertext {
+    let mut cmb = Ciphertext::zero(bfv_params);
+    for i in 0..pv_weights.len() {
+        cmb = &cmb + &pv_weights[i];
+    }
+
+    cmb
+}
+
+/// let's do message combinations
+///
+/// We assume that `k` and `message size`
+/// have values such that we only require
+/// one ciphertext for messages.
+///
+/// Let's stick to message size of a byte for now.
+/// This means we need only 1 set of `m` combinations
+/// since plaintext coefficient can simply fit up to two bytes.
+///
+/// TODO: figure out the level of PV_i and use that when encoding
+/// selector_vec into plaintext.
+fn combinations(bfv_params: &Arc<BfvParameters>, messages: Vec<u8>, pv: &Vec<Ciphertext>) {
+    debug_assert!(messages.len() == pv.len());
+
+    let N = pv.len();
+
+    // cmb_i is slot i of the ciphertext
+    let mut cmb = Ciphertext::zero(bfv_params);
+
+    for i in 0..N {
+        let weights = gen_weights();
+        for j in 0..weights.len() {
+            let (cmb_index, weight) = weights[j];
+
+            // if weight is 1 then include
+            // the i_th row in N to combination at cmb_index
+            if weight {
+                // Figure out the slot for cmb_index.
+                // Then build a plaintext selector vector
+                // and multiply it with PV_i and then add
+                // it to cmb.
+
+                let mut selector_vec = vec![0u64; bfv_params.degree()];
+                // fit in the message
+                selector_vec[cmb_index] = messages[i] as u64;
+                let selector_vec =
+                    Plaintext::try_encode(&selector_vec, Encoding::simd(), bfv_params).unwrap();
+
+                // PV[i] * selector_vec
+                let product = &pv[i] * &selector_vec;
+
+                // Product encodes either 0 or 1 depending on pertinency of i_th row
+                // at slot cmb_index.
+                // So now add it to cmb.
+                cmb = &cmb + &product;
+            }
+        }
+    }
+
+    // we have the cmb ciphertext now
 }
 
 fn run() {
@@ -658,7 +794,7 @@ mod tests {
         // vector ciphertexts to fully cover a single
         // compressed pv ct.
         // let ct_capacity = (degree as u32) * (16);
-        let ct_capacity = 5 * 16;
+        let ct_capacity = degree as u32 * (64 - bfv_params.plaintext().leading_zeros() - 1);
 
         // generate log_t * D {0,1} values
         let pv = Uniform::new(0u64, 2)
@@ -681,12 +817,12 @@ mod tests {
         let pv_compressed = pv_compress(&bfv_params, &pv_cts, 0);
         let pv_compressed = bfv_sk.try_decrypt(&pv_compressed).unwrap();
         let mut pv_compressed = Vec::<u64>::try_decode(&pv_compressed, Encoding::simd()).unwrap();
-        dbg!(&pv_compressed);
+        // dbg!(&pv_compressed);
         let final_vals = pv_compressed
             .iter_mut()
             .flat_map(|v| {
                 let mut bits = vec![];
-                for _ in 0..17 {
+                for i in 0..16 {
                     bits.push(*v & 1);
                     *v >>= 1;
                 }
@@ -694,10 +830,26 @@ mod tests {
             })
             .collect_vec();
 
-        println!("{:?}", final_vals[..pv.len()].to_vec());
-        println!("{:?}", pv);
+        // println!("{:?}", final_vals);
+        // println!("{:?}", pv);
 
         assert_eq!(final_vals[..pv.len()], pv);
+    }
+
+    fn test_combinations() {
+        let mut rng = thread_rng();
+        let degree = 8;
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&vec![62usize; 8])
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+        let N = 8;
     }
 }
 
