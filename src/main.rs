@@ -382,7 +382,7 @@ fn assign_buckets(
     q_mod: u64,
     N: usize,
 ) -> (Vec<Vec<usize>>, Vec<Vec<u64>>) {
-    let rng = thread_rng();
+    let mut rng = thread_rng();
 
     let mut buckets = vec![vec![]; N];
     let mut weights = vec![vec![]; N];
@@ -458,57 +458,21 @@ fn finalise_combinations(
     cmb
 }
 
-/// let's do message combinations
-///
-/// We assume that `k` and `message size`
-/// have values such that we only require
-/// one ciphertext for messages.
-///
-/// Let's stick to message size of a byte for now.
-/// This means we need only 1 set of `m` combinations
-/// since plaintext coefficient can simply fit up to two bytes.
-///
-/// TODO: figure out the level of PV_i and use that when encoding
-/// selector_vec into plaintext.
-fn combinations(bfv_params: &Arc<BfvParameters>, messages: Vec<u8>, pv: &Vec<Ciphertext>) {
-    debug_assert!(messages.len() == pv.len());
+fn solve_linear_equations(mut mat: Vec<Vec<f64>>, D: usize) {
+    // iterate thru pivots
+    for pivot_index in 0..D {
+        for curr_index in pivot_index + 1..D {
+            if pivot_index != curr_index {
+                let ratio = mat[curr_index][pivot_index] / mat[pivot_index][pivot_index];
 
-    let N = pv.len();
-
-    // cmb_i is slot i of the ciphertext
-    let mut cmb = Ciphertext::zero(bfv_params);
-
-    for i in 0..N {
-        let weights = gen_weights();
-        for j in 0..weights.len() {
-            let (cmb_index, weight) = weights[j];
-
-            // if weight is 1 then include
-            // the i_th row in N to combination at cmb_index
-            if weight {
-                // Figure out the slot for cmb_index.
-                // Then build a plaintext selector vector
-                // and multiply it with PV_i and then add
-                // it to cmb.
-
-                let mut selector_vec = vec![0u64; bfv_params.degree()];
-                // fit in the message
-                selector_vec[cmb_index] = messages[i] as u64;
-                let selector_vec =
-                    Plaintext::try_encode(&selector_vec, Encoding::simd(), bfv_params).unwrap();
-
-                // PV[i] * selector_vec
-                let product = &pv[i] * &selector_vec;
-
-                // Product encodes either 0 or 1 depending on pertinency of i_th row
-                // at slot cmb_index.
-                // So now add it to cmb.
-                cmb = &cmb + &product;
+                // manipulate curr_index
+                for i in pivot_index..D {
+                    mat[curr_index][i] -= (ratio * mat[pivot_index][i]);
+                }
             }
         }
     }
-
-    // we have the cmb ciphertext now
+    dbg!(mat);
 }
 
 fn run() {
@@ -591,11 +555,11 @@ fn run() {
 
 #[cfg(test)]
 mod tests {
-    use std::hash::Hash;
+    use std::{hash::Hash, ops::Mul};
 
     use itertools::izip;
 
-    use crate::utils::rot_to_exponent;
+    use crate::utils::{rot_to_exponent, solve_equations};
 
     use super::*;
 
@@ -850,6 +814,60 @@ mod tests {
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
         let N = 8;
+    }
+
+    #[test]
+    fn test_assign_buckets() {
+        let rng = thread_rng();
+        let k = 50;
+        let m = k * 2;
+        let data_size = 256;
+        let gamma = 5;
+        let q_mod = 65537;
+
+        let (buckets, weights) = assign_buckets(m, gamma, q_mod, k);
+
+        // let's generate k random values
+        let values = rng
+            .sample_iter(Uniform::new(0u64, q_mod))
+            .take(k)
+            .collect_vec();
+
+        let modulus = Modulus::new(q_mod).unwrap();
+
+        let mut comb = vec![0u64; m];
+        for i in 0..k {
+            for j in 0..gamma {
+                let cmb_i = buckets[i][j];
+                comb[cmb_i] = modulus.add(modulus.mul(values[i], weights[i][j]), comb[cmb_i]);
+            }
+        }
+        let rhs = comb.iter().map(|c| vec![*c]).collect_vec();
+
+        // construct LHS
+        let mut lhs = vec![vec![0u64; k]; m];
+        for i in 0..k {
+            for j in 0..gamma {
+                let cmb_i = buckets[i][j];
+                lhs[cmb_i][i] = weights[i][j];
+            }
+        }
+
+        let sols = solve_equations(lhs, rhs, q_mod)
+            .iter()
+            .map(|v| v[0])
+            .collect_vec();
+        assert_eq!(sols, values);
+    }
+
+    #[test]
+    fn test_lq() {
+        let mat = vec![
+            vec![2f64, 1.0, 1.0],
+            vec![5.0, 3.0, 3.0],
+            vec![1.0, 1.0, -1.0],
+        ];
+        solve_linear_equations(mat.clone(), 3);
     }
 }
 
