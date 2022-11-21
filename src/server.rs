@@ -131,31 +131,27 @@ pub fn range_fn(
     input: &Ciphertext,
     rlk_keys: &HashMap<usize, RelinearizationKey>,
 ) -> Ciphertext {
-    let mut now = std::time::SystemTime::now();
+    // let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level 4
     let k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, 0);
-    println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
+    // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
-    now = std::time::SystemTime::now();
+    // now = std::time::SystemTime::now();
     // m = x^256
     // all k_powers_of_m are at level 8
     let k_powers_of_m = powers_of_x(&k_powers_of_x[255], 256, bfv_params, rlk_keys, 4);
-    println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
+    // println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
 
     let coeffs = read_range_coeffs("params.bin");
 
     let mut total = Ciphertext::zero(bfv_params);
-    let mut count = 0;
     for i in 0..256 {
         let mut sum: Ciphertext = Ciphertext::zero(bfv_params);
         let mut flag = false;
 
-        now = std::time::SystemTime::now();
+        // now = std::time::SystemTime::now();
         for j in 1..257 {
             let c = coeffs[(i * 256) + (j - 1)];
-            if c < 1 {
-                count += 1;
-            }
             let c_pt = Plaintext::try_encode(
                 &vec![c; bfv_params.degree()],
                 Encoding::simd_at_level(4),
@@ -171,20 +167,20 @@ pub fn range_fn(
                 sum += &scalar_product;
             }
         }
-        println!(" sum for index {} {:?}", i, now.elapsed().unwrap());
+        // println!(" sum for index {} {:?}", i, now.elapsed().unwrap());
 
-        now = std::time::SystemTime::now();
+        // now = std::time::SystemTime::now();
         // match modulus
         for _ in 0..4 {
             sum.mod_switch_to_next_level();
         }
-        println!(
-            " switching down by 4 mods {} {:?}",
-            i,
-            now.elapsed().unwrap()
-        );
+        // println!(
+        //     " switching down by 4 mods {} {:?}",
+        //     i,
+        //     now.elapsed().unwrap()
+        // );
 
-        now = std::time::SystemTime::now();
+        // now = std::time::SystemTime::now();
         if i != 0 {
             // mul and add
             let mut p = &k_powers_of_m[i - 1] * &sum;
@@ -195,7 +191,7 @@ pub fn range_fn(
         } else {
             total = sum;
         }
-        println!(" total calc {} {:?}", i, now.elapsed().unwrap());
+        // println!(" total calc {} {:?}", i, now.elapsed().unwrap());
     }
 
     total = -total;
