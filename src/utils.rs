@@ -1,7 +1,9 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use fhe::bfv::BfvParameters;
 use fhe_math::zq::Modulus;
-use itertools::MultiProduct;
+use itertools::{Itertools, MultiProduct};
+use rand::distributions::Uniform;
+use rand::{thread_rng, Rng};
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -134,4 +136,58 @@ pub fn solve_equations(
         }
     }
     res
+}
+
+pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
+    let rng = thread_rng();
+    (0..size)
+        .into_iter()
+        .map(|_| {
+            // 256 bytes in 16 bytes pieces
+            rng.clone()
+                .sample_iter(Uniform::new(0u64, 65536))
+                .take(16)
+                .collect_vec()
+        })
+        .collect()
+}
+
+pub fn gen_clues() {
+    let rng = thread_rng();
+    let N = 100000;
+    let payloads = gen_paylods(N);
+}
+
+#[cfg(test)]
+mod tests {
+    use fhe::bfv::{BfvParametersBuilder, Ciphertext, Encoding, Plaintext, SecretKey};
+    use fhe_traits::{FheEncoder, FheEncrypter};
+    use itertools::Itertools;
+    use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+    use std::sync::Arc;
+
+    #[test]
+    fn one() {
+        let mut rng = thread_rng();
+        let degree = 32768;
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&[62; 10])
+                .build()
+                .unwrap(),
+        );
+        let sk = SecretKey::random(&params, &mut rng);
+        let values = Uniform::new(0u64, 65537)
+            .sample_iter(rng.clone())
+            .take(degree)
+            .collect_vec();
+        let pt = Plaintext::try_encode(&values, Encoding::simd(), &params).unwrap();
+
+        let ct1: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+        let ct2: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+
+        let ct3 = &ct1 + &ct2;
+    }
 }

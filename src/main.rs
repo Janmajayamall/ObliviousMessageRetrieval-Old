@@ -1,5 +1,4 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use core::num;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
@@ -113,6 +112,7 @@ fn powers_of_x(
         let mut res_deg = 0;
 
         while curr_deg > 0 {
+            let mut now = std::time::SystemTime::now();
             if (curr_deg & 1) == 1 {
                 curr_deg -= 1;
 
@@ -136,12 +136,18 @@ fn powers_of_x(
                             rlk_keys.get(&(num_mod[base_deg - 1] + mod_offset)).unwrap();
                         rlk_level.relinearizes(&mut res).unwrap();
 
+                        // now = std::time::SystemTime::now();
                         while num_mod[res_deg - 1]
                             < ((res_deg as f32).log2() / 2f32).ceil() as usize
                         {
                             res.mod_switch_to_next_level();
                             num_mod[res_deg - 1] += 1;
                         }
+                        // println!(
+                        //     "Mod level {} {:?}",
+                        //     num_mod[res_deg - 1],
+                        //     now.elapsed().unwrap()
+                        // );
                     }
                     outputs[res_deg - 1] = res.clone();
                     calculated[res_deg - 1] = 1;
@@ -161,13 +167,23 @@ fn powers_of_x(
 
                     while num_mod[base_deg - 1] < ((base_deg as f32).log2() / 2f32).ceil() as usize
                     {
+                        now = std::time::SystemTime::now();
+
                         base.mod_switch_to_next_level();
                         num_mod[base_deg - 1] += 1;
+
+                        println!(
+                            "Mod level {} {:?}",
+                            num_mod[base_deg - 1],
+                            now.elapsed().unwrap()
+                        );
                     }
+
                     outputs[base_deg - 1] = base.clone();
                     calculated[base_deg - 1] = 1;
                 }
             }
+            // println!("Degree {} {:?}", curr_deg, now.elapsed().unwrap());
         }
     }
     // match modulus
@@ -218,11 +234,16 @@ fn range_fn(
     input: &Ciphertext,
     rlk_keys: &HashMap<usize, RelinearizationKey>,
 ) -> Ciphertext {
+    let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level 4
     let k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, 0);
+    println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
+
+    now = std::time::SystemTime::now();
     // m = x^256
     // all k_powers_of_m are at level 8
     let k_powers_of_m = powers_of_x(&k_powers_of_x[255], 256, bfv_params, rlk_keys, 4);
+    println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
 
     let coeffs = read_range_coeffs("params.bin");
 
@@ -231,6 +252,8 @@ fn range_fn(
     for i in 0..256 {
         let mut sum: Ciphertext = Ciphertext::zero(bfv_params);
         let mut flag = false;
+
+        now = std::time::SystemTime::now();
         for j in 1..257 {
             let c = coeffs[(i * 256) + (j - 1)];
             if c < 1 {
@@ -251,12 +274,20 @@ fn range_fn(
                 sum += &scalar_product;
             }
         }
+        println!(" sum for index {} {:?}", i, now.elapsed().unwrap());
 
+        now = std::time::SystemTime::now();
         // match modulus
         for _ in 0..4 {
             sum.mod_switch_to_next_level();
         }
+        println!(
+            " switching down by 4 mods {} {:?}",
+            i,
+            now.elapsed().unwrap()
+        );
 
+        now = std::time::SystemTime::now();
         if i != 0 {
             // mul and add
             let mut p = &k_powers_of_m[i - 1] * &sum;
@@ -267,8 +298,9 @@ fn range_fn(
         } else {
             total = sum;
         }
+        println!(" total calc {} {:?}", i, now.elapsed().unwrap());
     }
-    dbg!(count);
+
     total = -total;
     // total.mod_switch_to_next_level();
 
@@ -280,36 +312,39 @@ fn pv_unpack(
     rot_keys: &HashMap<usize, GaloisKey>,
     pv_ct: &Ciphertext,
 ) -> Vec<Ciphertext> {
-    let mut selected_vals = vec![Ciphertext::zero(&bfv_params); bfv_params.degree()];
+    // let mut now = std::time::SystemTime::now();
+
+    let mut pv = vec![];
     for i in 0..bfv_params.degree() {
         let mut select = vec![0u64; bfv_params.degree()];
         select[i] = 1;
         let pt = Plaintext::try_encode(&select, Encoding::simd(), bfv_params).unwrap();
-        selected_vals[i] = pv_ct * &pt;
-    }
+        let mut value_vec = pv_ct * &pt;
 
-    let mut pv = vec![Ciphertext::zero(&bfv_params); bfv_params.degree()];
-    for index in 0..selected_vals.len() {
+        // Inner sum over value_vec to go from
+        // [0,0,0,0...,value,0,0,0...] to [value, value,...]
         let mut i = 1usize;
-        let mut res = selected_vals[index].clone();
         while i < bfv_params.degree() / 2 {
-            res = &res + &rot_keys.get(&i).unwrap().relinearize(&res).unwrap();
+            value_vec = &value_vec + &rot_keys.get(&i).unwrap().relinearize(&value_vec).unwrap();
             i *= 2;
         }
-        res = &res
+        value_vec = &value_vec
             + &rot_keys
                 .get(&(bfv_params.degree() * 2 - 1))
                 .unwrap()
-                .relinearize(&res)
+                .relinearize(&value_vec)
                 .unwrap();
 
-        pv[index] = res;
+        pv.push(value_vec);
     }
 
     pv
 }
 
-// decrypt pvw cts
+/// decrypt pvw cts
+///
+/// TODO: Replace `pvw_params.n` with value, where
+/// log(value) = ceil(log(pvw_params.n))
 fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &Arc<PVWParameters>,
@@ -376,6 +411,59 @@ fn pv_compress(bfv_params: &Arc<BfvParameters>, pv: &Vec<Ciphertext>, level: usi
     compressed_pv
 }
 
+fn pv_decompress(bfv_params: &Arc<BfvParameters>, pv_ct: &Ciphertext, sk: &SecretKey) -> Vec<u64> {
+    let pt = sk.try_decrypt(pv_ct).unwrap();
+    let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+
+    let coeff_size = 64 - bfv_params.plaintext().leading_zeros() - 1;
+    let mut pv = vec![];
+    values.into_iter().for_each(|mut v| {
+        for _ in 0..coeff_size {
+            pv.push(v & 1);
+            v >>= 1;
+        }
+    });
+    pv
+}
+
+fn construct_lhs(
+    pv: &Vec<u64>,
+    assigned_buckets: Vec<Vec<usize>>,
+    assigned_weights: Vec<Vec<u64>>,
+    m: usize,
+    k: usize,
+    gamma: usize,
+    N: usize,
+) -> Vec<Vec<u64>> {
+    let mut lhs = vec![vec![0u64; k]; m];
+
+    let mut overflow_counter = 0;
+    for i in 0..N {
+        if pv[i] == 1 {
+            for j in 0..gamma {
+                let cmb_i = assigned_buckets[i][j];
+                lhs[cmb_i][overflow_counter] = assigned_weights[i][j];
+            }
+            overflow_counter += 1;
+        }
+    }
+
+    assert!(overflow_counter <= k);
+
+    lhs
+}
+
+fn construct_rhs(values: Vec<u64>, m: usize, data_size: usize, q_mod: u64) -> Vec<Vec<u64>> {
+    let size = (64 - q_mod.leading_zeros() - 1) as usize;
+    debug_assert!(data_size % size == 0);
+    let bucket_size = data_size / size;
+
+    values[..m * bucket_size]
+        .chunks(bucket_size)
+        .map(|bucket| bucket.to_vec())
+        .collect()
+}
+
 fn assign_buckets(
     no_of_buckets: usize,
     gamma: usize,
@@ -423,6 +511,8 @@ fn pv_weights(
     gamma: usize,
 ) -> Vec<Ciphertext> {
     let q_mod = bfv_params.plaintext();
+    let modulus = Modulus::new(q_mod).unwrap();
+
     let mut products = vec![Ciphertext::zero(&bfv_params); N];
     for row_index in 0..N {
         let mut pt = vec![0u64; bfv_params.degree()];
@@ -433,8 +523,13 @@ fn pv_weights(
 
             for chunk_index in 0..payload_size {
                 // payload chunk * weight
-                pt[bucket + chunk_index] +=
-                    (payloads[row_index][chunk_index] * assigned_weights[row_index][i]) % q_mod;
+                pt[bucket + chunk_index] = modulus.add(
+                    pt[bucket + chunk_index],
+                    modulus.mul(
+                        payloads[row_index][chunk_index],
+                        assigned_weights[row_index][i],
+                    ),
+                )
             }
         }
 
@@ -456,23 +551,6 @@ fn finalise_combinations(
     }
 
     cmb
-}
-
-fn solve_linear_equations(mut mat: Vec<Vec<f64>>, D: usize) {
-    // iterate thru pivots
-    for pivot_index in 0..D {
-        for curr_index in pivot_index + 1..D {
-            if pivot_index != curr_index {
-                let ratio = mat[curr_index][pivot_index] / mat[pivot_index][pivot_index];
-
-                // manipulate curr_index
-                for i in pivot_index..D {
-                    mat[curr_index][i] -= (ratio * mat[pivot_index][i]);
-                }
-            }
-        }
-    }
-    dbg!(mat);
 }
 
 fn run() {
@@ -563,98 +641,108 @@ mod tests {
 
     use super::*;
 
+    const MODULI_OMR: &[u64; 15] = &[
+        268369921,
+        549755486209,
+        1152921504606584833,
+        1152921504598720513,
+        1152921504597016577,
+        1152921504595968001,
+        1152921504595640321,
+        1152921504593412097,
+        1152921504592822273,
+        1152921504592429057,
+        1152921504589938689,
+        1152921504586530817,
+        4293918721,
+        1073479681,
+        1152921504585547777,
+    ];
+
     #[test]
     fn test_run() {
         run();
     }
 
     #[test]
-    fn rotations() {
-        let degree = 8;
-        let params = Arc::new(
-            BfvParametersBuilder::new()
-                .set_degree(degree)
-                .set_plaintext_modulus(65537)
-                .set_moduli_sizes(&[62; 3])
-                .build()
-                .unwrap(),
-        );
+    fn test_range_fn_ct() {
         let mut rng = thread_rng();
-        let sk = SecretKey::random(&params, &mut rng);
+        let poly_degree = 32768;
 
-        let mut t = vec![0u64; degree];
-        t[0] = 121;
-        t[3] = 623;
-
-        let pt = Plaintext::try_encode(&t, Encoding::simd(), &params).unwrap();
-        let ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
-
-        let rot_key = GaloisKey::new(&sk, 3, 0, 0, &mut rng).unwrap();
-
-        let mut rotated_ct = ct.clone();
-        // rotated_ct = rot_key.relinearize(&rotated_ct).unwrap();
-        for i in 0..1 {
-            rotated_ct = rot_key.relinearize(&rotated_ct).unwrap();
-        }
-
-        let rotated_pt = sk.try_decrypt(&rotated_ct).unwrap();
-        println!(
-            "{:?}",
-            Vec::<u64>::try_decode(&rotated_pt, Encoding::simd()).unwrap()
-        );
-    }
-
-    #[test]
-    fn test_range_fn() {
-        let mut rng = thread_rng();
-        let poly_degree = 8;
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(poly_degree)
                 .set_plaintext_modulus(65537)
-                .set_moduli_sizes(&vec![62usize; 14])
+                // .set_moduli_sizes(&vec![
+                //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
+                // ])
+                .set_moduli(MODULI_OMR)
                 .build()
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-        let t_ctx = Arc::new(Context::new(&[65537], 8).unwrap());
 
+        // let mut now = std::time::SystemTime::now();
         let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
         for i in 0..bfv_params.max_level() {
             let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
             rlk_keys.insert(i, rlk);
         }
+        // println!("RLK gen took {:?}", now.elapsed().unwrap());
 
-        let dist = Uniform::new(0u64, 65536);
-        let X = dist.sample_iter(rng.clone()).take(8).collect_vec();
+        let X = Uniform::new(0u64, 65536)
+            .sample_iter(rng.clone())
+            .take(poly_degree)
+            .collect_vec();
         let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
-        let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
-        let res_poly = range_fn_poly(&t_ctx, &pt_poly, poly_degree);
-
+        // now = std::time::SystemTime::now();
         let res_ct = range_fn(&bfv_params, &ct, &rlk_keys);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
+        // println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
-        assert_eq!(
-            Vec::<u64>::try_decode(&res_pt, Encoding::simd()).unwrap(),
-            res_poly.coefficients().to_slice().unwrap()
-        );
+        // range operation on plaintext
+        // let t_ctx = Arc::new(Context::new(&[65537], poly_degree).unwrap());
+        // let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
+        // let res_poly = range_fn_poly(&t_ctx, &pt_poly, poly_degree);
+
+        // assert_eq!(
+        //     Vec::<u64>::try_decode(&res_pt, Encoding::simd()).unwrap(),
+        //     res_poly.coefficients().to_slice().unwrap()
+        // );
+    }
+
+    #[test]
+    fn test_range_fn_poly() {
+        let mut rng = thread_rng();
+        let degree = 32768;
+        let ctx = Arc::new(Context::new(&[65537], degree).unwrap());
+        let X = Uniform::new(0u64, 65536)
+            .sample_iter(rng.clone())
+            .take(degree)
+            .collect_vec();
+        let pt_poly = Poly::try_convert_from(&X, &ctx, false, Representation::Ntt).unwrap();
+
+        let now = std::time::SystemTime::now();
+        range_fn_poly(&ctx, &pt_poly, degree);
+        println!(" Range fn poly {:?}", now.elapsed().unwrap());
     }
 
     #[test]
     fn power_of_x() {
+        let degree = 32768;
         let mut rng = thread_rng();
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
-                .set_degree(8)
+                .set_degree(degree)
                 .set_plaintext_modulus(65537)
-                .set_moduli_sizes(&vec![62usize; 8])
+                .set_moduli_sizes(&vec![62usize; 23])
                 .build()
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-        let t_ctx = Arc::new(Context::new(&[65537], 8).unwrap());
+        let t_ctx = Arc::new(Context::new(&[65537], degree).unwrap());
 
         let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
         for i in 0..bfv_params.max_level() {
@@ -662,15 +750,21 @@ mod tests {
             rlk_keys.insert(i, rlk);
         }
 
-        let X = vec![2u64, 3, 4, 3, 4, 1, 3, 4];
+        let k_degree = 256;
+
+        let X = Uniform::new(0u64, 65537)
+            .sample_iter(rng.clone())
+            .take(degree)
+            .collect_vec();
         let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
         let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
-        let k_degree = 256;
-
         let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree);
+
+        // let mut now = std::time::SystemTime::now();
         let powers_ct = powers_of_x(&ct, k_degree, &bfv_params, &rlk_keys, 0);
+        // println!(" Final power of X {:?}", now.elapsed().unwrap());
 
         izip!(powers.iter(), powers_ct.iter()).for_each(|(p, ct)| {
             let pt = bfv_sk.try_decrypt(ct).unwrap();
@@ -682,12 +776,12 @@ mod tests {
     #[test]
     fn test_pv_unpack() {
         let mut rng = thread_rng();
-        let degree = 8;
+        let degree = 32768;
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(degree)
                 .set_plaintext_modulus(65537)
-                .set_moduli_sizes(&vec![62usize; 3])
+                .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 2..])
                 .build()
                 .unwrap(),
         );
@@ -704,7 +798,6 @@ mod tests {
             );
             i *= 2;
         }
-
         rot_keys.insert(
             bfv_params.degree() * 2 - 1,
             GaloisKey::new(&bfv_sk, bfv_params.degree() * 2 - 1, 0, 0, &mut rng).unwrap(),
@@ -715,12 +808,15 @@ mod tests {
         let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
+        let mut now = std::time::SystemTime::now();
         let unpacked_cts = pv_unpack(&bfv_params, &rot_keys, &ct);
-        unpacked_cts.iter().enumerate().for_each(|(index, u_ct)| {
-            let pt = bfv_sk.try_decrypt(&u_ct).unwrap();
-            let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
-            assert_eq!(v, vec![values[index]; degree]);
-        });
+        println!("pv_unpack took {:?}", now.elapsed());
+
+        // unpacked_cts.iter().enumerate().for_each(|(index, u_ct)| {
+        //     let pt = bfv_sk.try_decrypt(&u_ct).unwrap();
+        //     let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+        //     assert_eq!(v, vec![values[index]; degree]);
+        // });
     }
 
     #[test]
@@ -731,7 +827,7 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(degree)
                 .set_plaintext_modulus(65537)
-                .set_moduli_sizes(&vec![62usize; 8])
+                .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 2..])
                 .build()
                 .unwrap(),
         );
@@ -821,7 +917,6 @@ mod tests {
         let rng = thread_rng();
         let k = 50;
         let m = k * 2;
-        let data_size = 256;
         let gamma = 5;
         let q_mod = 65537;
 
@@ -861,13 +956,39 @@ mod tests {
     }
 
     #[test]
-    fn test_lq() {
-        let mat = vec![
-            vec![2f64, 1.0, 1.0],
-            vec![5.0, 3.0, 3.0],
-            vec![1.0, 1.0, -1.0],
-        ];
-        solve_linear_equations(mat.clone(), 3);
+    fn rotations() {
+        let degree = 8;
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(65537)
+                .set_moduli_sizes(&[62; 3])
+                .build()
+                .unwrap(),
+        );
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let mut t = vec![0u64; degree];
+        t[0] = 121;
+        t[3] = 623;
+
+        let pt = Plaintext::try_encode(&t, Encoding::simd(), &params).unwrap();
+        let ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+
+        let rot_key = GaloisKey::new(&sk, 3, 0, 0, &mut rng).unwrap();
+
+        let mut rotated_ct = ct.clone();
+        // rotated_ct = rot_key.relinearize(&rotated_ct).unwrap();
+        for i in 0..1 {
+            rotated_ct = rot_key.relinearize(&rotated_ct).unwrap();
+        }
+
+        let rotated_pt = sk.try_decrypt(&rotated_ct).unwrap();
+        println!(
+            "{:?}",
+            Vec::<u64>::try_decode(&rotated_pt, Encoding::simd()).unwrap()
+        );
     }
 }
 
