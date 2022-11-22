@@ -32,10 +32,9 @@ pub fn gen_pvw_sk_cts(
     for i in 0..pvw_params.ell {
         let mut values = vec![0u64; bfv_params.degree()];
         for j in 0..bfv_params.degree() {
-            let count = j / sec_len;
             let index = j % sec_len;
             if index < pvw_params.n {
-                values[index + (count * sec_len)] = pvw_sk.key[i][index];
+                values[j] = pvw_sk.key[i][index];
             }
         }
         let values_pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();

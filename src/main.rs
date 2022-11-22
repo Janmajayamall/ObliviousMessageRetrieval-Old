@@ -44,15 +44,15 @@ const MODULI_OMR: &[u64; 15] = &[
     1073479681,
     1152921504585547777,
 ];
-const DEGREE: usize = 32768;
+const DEGREE: usize = 1024;
 const MODULI_OMR_PT: &[u64; 1] = &[65537];
 
 fn run() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
-            .set_degree(1024)
-            .set_plaintext_modulus(65537)
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
             .set_moduli(MODULI_OMR)
             .build()
             .unwrap(),
@@ -70,54 +70,73 @@ fn run() {
     let pvw_pk = pvw_sk.public_key();
 
     // gen clues
-    let N = 2;
-    let mut clues = vec![];
-    for i in 0..N {
-        clues.push(pvw_pk.encrypt(vec![0, 1, 1, 0]));
+    let N = DEGREE;
+    let tmp = Uniform::new(0, N);
+    let mut pertinent_indices = vec![];
+    while pertinent_indices.len() != 50 {
+        let v = tmp.sample(&mut rng);
+        if !pertinent_indices.contains(&v) {
+            pertinent_indices.push(v);
+        }
     }
+    pertinent_indices.sort();
+    println!("Pertinent indices {:?}", pertinent_indices);
+
+    dbg!("Generating clues");
+    let clues = (0..N)
+        .map(|index| {
+            if pertinent_indices.contains(&index) {
+                pvw_pk.encrypt(vec![1, 1, 1, 1])
+            } else {
+                let tmp_sk = PVWSecretKey::gen_sk(&pvw_params);
+                let tmp_pk = tmp_sk.public_key();
+                pvw_pk.encrypt(vec![0, 0, 0, 0])
+            }
+        })
+        .collect_vec();
 
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
-
     let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
 
-    let d = decrypt_pvw(&bfv_params, &pvw_params, ct_pvw_sk, top_rot_key, clues);
+    // run detection
+    dbg!("Running decrypt_pvw");
+    let mut decrypted_clues = decrypt_pvw(&bfv_params, &pvw_params, ct_pvw_sk, top_rot_key, clues);
+
+    for _ in 0..3 {
+        
+    }
 
     // relinearization keys at all levels
+    dbg!("Generating rlk keys");
     let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
     for i in 0..bfv_params.max_level() {
         let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
         rlk_keys.insert(i, rlk);
     }
 
-    let mut d_checked = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
-    for i in 0..pvw_params.ell {
-        d_checked[i] = range_fn(&bfv_params, &d[i], &rlk_keys);
+    unsafe {
+        dbg!("Noise:", bfv_sk.measure_noise(&decrypted_clues[0]));
     }
 
-    for i in 0..pvw_params.ell {
-        let d_el = bfv_sk.try_decrypt(&d_checked[i]).unwrap();
-        let d_el = Vec::<u64>::try_decode(&d_el, Encoding::simd()).unwrap();
-        // let v = d_el
-        //     .iter()
-        //     .map(|v| (*v >= pvw_params.q / 2) as u64)
-        //     .collect_vec();
-        dbg!(&d_el[..20]);
-    }
+    dbg!("Evaluating range_fn");
+    // let range_res = range_fn(&bfv_params, &decrypted_clues[0], &rlk_keys);
+    let range_res_pt = bfv_sk.try_decrypt(&decrypted_clues[0]).unwrap();
+    let range_res = Vec::<u64>::try_decode(&range_res_pt, Encoding::simd()).unwrap();
+    let mut res_indices = vec![];
+    range_res.iter().enumerate().for_each(|(index, bit)| {
+        if *bit >= 32768 {
+            res_indices.push(index);
+        }
+    });
 
-    // let rlk = RelinearizationKey::new(&bfv_sk, &mut rng).unwrap();
+    println!("{:?}", pertinent_indices);
+    println!("{:?}", res_indices);
 
-    // for i in 0..pvw_params.ell {
-    //     let d_ct = range_fn(&bfv_params, &h_d[i], &rlk);
-    //     let d = bfv_sk.try_decrypt(&d_ct).unwrap();
-    //     let v = Vec::<u64>::try_decode(&d, Encoding::simd()).unwrap();
-    //     dbg!(v);
-    //     // dbg!(((v[0] + (pvw_params.q / 4)) / (pvw_params.q / 2)) % 2);
-    //     // dbg!(v[0]);
-    // }
+    // assert!(pertinent_indices == res_indices);
 }
 
 fn main() {
-    println!("Hello, world!");
+    run();
 }
 
 #[cfg(test)]

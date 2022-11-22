@@ -183,4 +183,29 @@ mod tests {
             assert_eq!(m, d_m)
         }
     }
+
+    #[test]
+    fn encrypt_but() {
+        let params = PVWParameters {
+            n: 450,
+            m: 100,
+            ell: 4,
+            variance: 2,
+            q: 65537,
+        };
+
+        let mut rng = thread_rng();
+        let sk = PVWSecretKey::gen_sk(&params);
+        let pk = sk.public_key();
+
+        let sk1 = PVWSecretKey::gen_sk(&params);
+        let pk1 = sk1.public_key();
+
+        let distr = Uniform::new(0u64, 2);
+        let ct = pk1.encrypt(vec![1, 1, 1, 1]);
+
+        let d_m = sk.decrypt(ct);
+
+        dbg!(d_m);
+    }
 }

@@ -201,9 +201,6 @@ pub fn range_fn(
 }
 
 /// decrypt pvw cts
-///
-/// TODO: Replace `pvw_params.n` with value, where
-/// log(value) = ceil(log(pvw_params.n))
 pub fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &Arc<PVWParameters>,
@@ -216,7 +213,7 @@ pub fn decrypt_pvw(
     let sec_len = pvw_params.n.next_power_of_two();
     debug_assert!(((bfv_params.degree() / sec_len) * pvw_params.n) >= clues.len());
 
-    // encrypts sk * a for N clues
+    // computes sk * a
     let mut sk_a = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
     for i in 0..sec_len {
         let mut values = vec![0u64; clues.len()];
@@ -240,10 +237,9 @@ pub fn decrypt_pvw(
         }
     }
 
-    // d = b-sa
+    // d = b - sk * a
     let mut d = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
     for ell_index in 0..pvw_params.ell {
-        // we assume that N <= D
         let mut b_ell = vec![0u64; clues.len()];
         for i in 0..clues.len() {
             b_ell[i] = clues[i].b[ell_index];
@@ -256,34 +252,71 @@ pub fn decrypt_pvw(
     d
 }
 
+/// Computes sum of all slot values
+/// of `ct` such that each slot stores
+/// the final sum.
+/// That is translates from [0,1,2,3] -> [6, 6, 6, 6]
+pub fn inner_sum(
+    bfv_params: &Arc<BfvParameters>,
+    ct: &Ciphertext,
+    rot_keys: &HashMap<usize, GaloisKey>,
+) -> Ciphertext {
+    let mut inner_sum = ct.clone();
+    let mut i = 0;
+    while i < bfv_params.degree() / 2 {
+        let temp = rot_keys.get(&i).unwrap().relinearize(&inner_sum).unwrap();
+        inner_sum = &inner_sum + &temp;
+        i *= 2;
+    }
+    inner_sum = &inner_sum
+        + &rot_keys
+            .get(&(bfv_params.degree() * 2 - 1))
+            .unwrap()
+            .relinearize(&inner_sum)
+            .unwrap();
+
+    inner_sum
+}
+
+/// unpacks pv_ct encrypting {0,1}
+/// in `poly_degree` coefficients
+/// into `poly_degree` ciphertexts
+/// encrypting each coefficient value.
+///
+/// TODO: enable batch processing since
+/// unpacking 2**15 ciphertexts in one
+/// go is huge load on memory
 pub fn pv_unpack(
     bfv_params: &Arc<BfvParameters>,
     rot_keys: &HashMap<usize, GaloisKey>,
-    pv_ct: &Ciphertext,
+    pv_ct: &mut Ciphertext,
+    expansion_size: usize,
+    offset: usize,
 ) -> Vec<Ciphertext> {
     // let mut now = std::time::SystemTime::now();
 
+    let mut select = vec![0u64; bfv_params.degree()];
+    select[0] = 1;
+    let select_pt = Plaintext::try_encode(&select, Encoding::simd(), bfv_params).unwrap();
+
     let mut pv = vec![];
-    for i in 0..bfv_params.degree() {
-        let mut select = vec![0u64; bfv_params.degree()];
-        select[i] = 1;
-        let pt = Plaintext::try_encode(&select, Encoding::simd(), bfv_params).unwrap();
-        let mut value_vec = pv_ct * &pt;
-
-        // Inner sum over value_vec to go from
-        // [0,0,0,0...,value,0,0,0...] to [value, value,...]
-        let mut i = 1usize;
-        while i < bfv_params.degree() / 2 {
-            value_vec = &value_vec + &rot_keys.get(&i).unwrap().relinearize(&value_vec).unwrap();
-            i *= 2;
+    for i in offset..(expansion_size + offset) {
+        if i != 0 {
+            if i == (bfv_params.degree() / 2) {
+                // rotate column when offset is halfway
+                *pv_ct = rot_keys
+                    .get(&(bfv_params.degree() / 2 - 1))
+                    .unwrap()
+                    .relinearize(&pv_ct)
+                    .unwrap();
+                *pv_ct = rot_keys.get(&1).unwrap().relinearize(&pv_ct).unwrap();
+            } else {
+                *pv_ct = rot_keys.get(&1).unwrap().relinearize(&pv_ct).unwrap();
+            }
         }
-        value_vec = &value_vec
-            + &rot_keys
-                .get(&(bfv_params.degree() * 2 - 1))
-                .unwrap()
-                .relinearize(&value_vec)
-                .unwrap();
 
+        let mut value_vec = &*pv_ct * &select_pt;
+        value_vec = inner_sum(bfv_params, &value_vec, rot_keys);
         pv.push(value_vec);
     }
 
@@ -490,6 +523,7 @@ mod tests {
             .sample_iter(rng.clone())
             .take(poly_degree)
             .collect_vec();
+        let X_bin = X.iter().map(|v| (*v >= 32768u64) as u64).collect_vec();
         let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
@@ -497,6 +531,11 @@ mod tests {
         let res_ct = range_fn(&bfv_params, &ct, &rlk_keys);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
+
+        assert_eq!(
+            Vec::<u64>::try_decode(&res_pt, Encoding::simd()).unwrap(),
+            X_bin
+        );
 
         // range operation on plaintext
         // let t_ctx = Arc::new(Context::new(&[65537], poly_degree).unwrap());
