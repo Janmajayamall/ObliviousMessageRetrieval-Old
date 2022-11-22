@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use client::gen_pvw_sk_cts;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
@@ -75,20 +76,11 @@ fn run() {
         clues.push(pvw_pk.encrypt(vec![0, 1, 1, 0]));
     }
 
-    let mut ct_pvw_sk = vec![Ciphertext::zero(&bfv_params); pvw_params.ell];
-    for l_i in 0..pvw_params.ell {
-        let mut values = vec![0u64; bfv_params.degree()];
-        // make sure `n` < `D` (tbh should be way smaller)
-        for n_i in 0..bfv_params.degree() {
-            values[n_i] = pvw_sk.key[l_i][n_i % pvw_params.n];
-        }
-        let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
-        ct_pvw_sk[l_i] = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
-    }
+    let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
     let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
 
-    let d = decrypt_pvw(&bfv_params, &pvw_params, &ct_pvw_sk, top_rot_key, clues);
+    let d = decrypt_pvw(&bfv_params, &pvw_params, ct_pvw_sk, top_rot_key, clues);
 
     // relinearization keys at all levels
     let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();

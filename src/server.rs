@@ -40,7 +40,7 @@ pub fn powers_of_x(
         let mut res_deg = 0;
 
         while curr_deg > 0 {
-            let mut now = std::time::SystemTime::now();
+            // let mut now = std::time::SystemTime::now();
             if (curr_deg & 1) == 1 {
                 curr_deg -= 1;
 
@@ -95,16 +95,16 @@ pub fn powers_of_x(
 
                     while num_mod[base_deg - 1] < ((base_deg as f32).log2() / 2f32).ceil() as usize
                     {
-                        now = std::time::SystemTime::now();
+                        // now = std::time::SystemTime::now();
 
                         base.mod_switch_to_next_level();
                         num_mod[base_deg - 1] += 1;
 
-                        println!(
-                            "Mod level {} {:?}",
-                            num_mod[base_deg - 1],
-                            now.elapsed().unwrap()
-                        );
+                        // println!(
+                        //     "Mod level {} {:?}",
+                        //     num_mod[base_deg - 1],
+                        //     now.elapsed().unwrap()
+                        // );
                     }
 
                     outputs[base_deg - 1] = base.clone();
@@ -207,29 +207,36 @@ pub fn range_fn(
 pub fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &Arc<PVWParameters>,
-    ct_pvw_sk: &Vec<Ciphertext>,
+    mut ct_pvw_sk: Vec<Ciphertext>,
     rotation_key: GaloisKey,
     clues: Vec<PVWCiphertext>,
 ) -> Vec<Ciphertext> {
     debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
 
+    let sec_len = pvw_params.n.next_power_of_two();
+    debug_assert!(((bfv_params.degree() / sec_len) * pvw_params.n) >= clues.len());
+
     // encrypts sk * a for N clues
     let mut sk_a = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
-    for ell_index in 0..pvw_params.ell {
-        let mut sk = ct_pvw_sk[ell_index].clone();
-        for i in 0..pvw_params.n {
-            let mut values = vec![0u64; bfv_params.degree()];
-            for j in 0..clues.len() {
-                let index = (i + j) % pvw_params.n;
+    for i in 0..sec_len {
+        let mut values = vec![0u64; clues.len()];
+        for j in 0..clues.len() {
+            let index = (i + j) % sec_len;
+
+            if index >= pvw_params.n {
+                values[j] = 0;
+            } else {
                 values[j] = clues[j].a[index];
             }
+        }
+        let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
 
-            let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
-            let product = &sk * &values_pt;
+        for ell_index in 0..pvw_params.ell {
+            let product = &ct_pvw_sk[ell_index] * &values_pt;
             sk_a[ell_index] = &sk_a[ell_index] + &product;
 
             // rotate left by 1
-            sk = rotation_key.relinearize(&sk).unwrap();
+            ct_pvw_sk[ell_index] = rotation_key.relinearize(&ct_pvw_sk[ell_index]).unwrap();
         }
     }
 
@@ -237,7 +244,7 @@ pub fn decrypt_pvw(
     let mut d = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
     for ell_index in 0..pvw_params.ell {
         // we assume that N <= D
-        let mut b_ell = vec![0u64; bfv_params.degree()];
+        let mut b_ell = vec![0u64; clues.len()];
         for i in 0..clues.len() {
             b_ell[i] = clues[i].b[ell_index];
         }
@@ -370,9 +377,86 @@ pub fn finalise_combinations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::gen_pvw_sk_cts;
     use crate::utils::{powers_of_x_poly, range_fn_poly, rot_to_exponent};
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use itertools::izip;
+
+    #[test]
+    fn test_decrypt_pvw() {
+        let poly_degree = DEGREE;
+        let t = MODULI_OMR_PT[0];
+
+        let mut rng = thread_rng();
+
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(poly_degree)
+                .set_plaintext_modulus(t)
+                // .set_moduli_sizes(&vec![
+                //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
+                // ])
+                .set_moduli(MODULI_OMR)
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+        let pvw_params = Arc::new(PVWParameters {
+            n: 450,
+            m: 100,
+            ell: 4,
+            variance: 2,
+            q: 65537,
+        });
+        let pvw_sk = PVWSecretKey::gen_sk(&pvw_params);
+        let pvw_pk = pvw_sk.public_key();
+
+        let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
+
+        // encrypt values
+        let mut clues = vec![];
+        let mut rng = thread_rng();
+        for i in 0..DEGREE {
+            let m = Uniform::new(0, 2)
+                .sample_iter(rng.clone())
+                .take(pvw_params.ell)
+                .collect_vec();
+            clues.push(m);
+        }
+
+        let clues_ct = clues
+            .iter()
+            .map(|c| pvw_pk.encrypt(c.to_vec()))
+            .collect_vec();
+
+        let mut rng = thread_rng();
+        let rot_key =
+            GaloisKey::new(&bfv_sk, rot_to_exponent(1, &bfv_params), 0, 0, &mut rng).unwrap();
+
+        let now = std::time::SystemTime::now();
+        let res = decrypt_pvw(&bfv_params, &pvw_params, pvw_sk_cts, rot_key, clues_ct);
+        println!("decrypt_pvw took {:?}", now.elapsed());
+
+        let res = res
+            .iter()
+            .map(|c| {
+                let p = bfv_sk.try_decrypt(&c).unwrap();
+                Vec::<u64>::try_decode(&p, Encoding::simd()).unwrap()[..clues.len()].to_vec()
+            })
+            .collect_vec();
+
+        let mut count = 0;
+        for i in 0..pvw_params.ell {
+            for j in 0..clues.len() {
+                let bit = (res[i][j] >= (pvw_params.q / 2)) as u64;
+                if bit != clues[j][i] {
+                    count += 1;
+                }
+            }
+        }
+        assert!(count == 0);
+    }
 
     #[test]
     fn test_range_fn_ct() {
@@ -394,13 +478,13 @@ mod tests {
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        // let mut now = std::time::SystemTime::now();
+        let mut now = std::time::SystemTime::now();
         let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
         for i in 0..bfv_params.max_level() {
             let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
             rlk_keys.insert(i, rlk);
         }
-        // println!("RLK gen took {:?}", now.elapsed().unwrap());
+        println!("RLK gen took {:?}", now.elapsed().unwrap());
 
         let X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
@@ -409,10 +493,10 @@ mod tests {
         let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
-        // now = std::time::SystemTime::now();
+        now = std::time::SystemTime::now();
         let res_ct = range_fn(&bfv_params, &ct, &rlk_keys);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
-        // println!(" Range fn ct {:?}", now.elapsed().unwrap());
+        println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
         // range operation on plaintext
         // let t_ctx = Arc::new(Context::new(&[65537], poly_degree).unwrap());

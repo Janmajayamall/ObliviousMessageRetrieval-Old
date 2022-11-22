@@ -27,6 +27,7 @@ impl Default for PVWParameters {
     }
 }
 
+#[derive(Clone)]
 pub struct PVWCiphertext {
     pub a: Vec<u64>,
     pub b: Vec<u64>,

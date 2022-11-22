@@ -1,3 +1,4 @@
+use crate::pvw::{PVWParameters, PVWSecretKey};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
@@ -17,6 +18,31 @@ use rand::{Rng, RngCore};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{fs::File, io::Write, path::Path, vec};
+
+pub fn gen_pvw_sk_cts(
+    bfv_params: &Arc<BfvParameters>,
+    pvw_params: &Arc<PVWParameters>,
+    bfv_sk: &SecretKey,
+    pvw_sk: &PVWSecretKey,
+) -> Vec<Ciphertext> {
+    let mut rng = thread_rng();
+    let mut cts = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
+
+    let sec_len = pvw_params.n.next_power_of_two();
+    for i in 0..pvw_params.ell {
+        let mut values = vec![0u64; bfv_params.degree()];
+        for j in 0..bfv_params.degree() {
+            let count = j / sec_len;
+            let index = j % sec_len;
+            if index < pvw_params.n {
+                values[index + (count * sec_len)] = pvw_sk.key[i][index];
+            }
+        }
+        let values_pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
+        cts[i] = bfv_sk.try_encrypt(&values_pt, &mut rng).unwrap();
+    }
+    cts
+}
 
 pub fn pv_decompress(
     bfv_params: &Arc<BfvParameters>,
