@@ -44,7 +44,7 @@ const MODULI_OMR: &[u64; 15] = &[
     1073479681,
     1152921504585547777,
 ];
-const DEGREE: usize = 1024;
+const DEGREE: usize = 32768;
 const MODULI_OMR_PT: &[u64; 1] = &[65537];
 
 fn run() {
@@ -102,9 +102,7 @@ fn run() {
     dbg!("Running decrypt_pvw");
     let mut decrypted_clues = decrypt_pvw(&bfv_params, &pvw_params, ct_pvw_sk, top_rot_key, clues);
 
-    for _ in 0..3 {
-        
-    }
+    for _ in 0..3 {}
 
     // relinearization keys at all levels
     dbg!("Generating rlk keys");

@@ -133,7 +133,7 @@ pub fn range_fn(
 ) -> Ciphertext {
     // let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level 4
-    let k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, 0);
+    let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, 0);
     // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
     // now = std::time::SystemTime::now();
@@ -141,6 +141,12 @@ pub fn range_fn(
     // all k_powers_of_m are at level 8
     let k_powers_of_m = powers_of_x(&k_powers_of_x[255], 256, bfv_params, rlk_keys, 4);
     // println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
+
+    for p in &mut k_powers_of_x {
+        for _ in 0..4 {
+            p.mod_switch_to_next_level();
+        }
+    }
 
     let coeffs = read_range_coeffs("params.bin");
 
@@ -154,7 +160,7 @@ pub fn range_fn(
             let c = coeffs[(i * 256) + (j - 1)];
             let c_pt = Plaintext::try_encode(
                 &vec![c; bfv_params.degree()],
-                Encoding::simd_at_level(4),
+                Encoding::simd_at_level(8),
                 bfv_params,
             )
             .unwrap();
@@ -171,9 +177,9 @@ pub fn range_fn(
 
         // now = std::time::SystemTime::now();
         // match modulus
-        for _ in 0..4 {
-            sum.mod_switch_to_next_level();
-        }
+        // for _ in 0..4 {
+        //     sum.mod_switch_to_next_level();
+        // }
         // println!(
         //     " switching down by 4 mods {} {:?}",
         //     i,
@@ -317,9 +323,9 @@ pub fn pv_unpack(
         }
 
         let mut value_vec = &*pv_ct * &select_pt;
-        // dbg!(
-        //     Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
-        // );
+        dbg!(
+            Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
+        );
         unsafe {
             dbg!(sk.measure_noise(&pv_ct));
         }
@@ -514,7 +520,7 @@ mod tests {
                 // .set_moduli_sizes(&vec![
                 //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
                 // ])
-                .set_moduli(MODULI_OMR)
+                .set_moduli(&MODULI_OMR[..])
                 .build()
                 .unwrap(),
         );
@@ -634,8 +640,8 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(degree)
                 .set_plaintext_modulus(t)
-                .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 3..])
-                // .set_moduli_sizes(&[60, 60])
+                // .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 3..])
+                .set_moduli_sizes(&[60, 60, 60])
                 .build()
                 .unwrap(),
         );
