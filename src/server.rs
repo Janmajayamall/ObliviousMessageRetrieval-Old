@@ -130,17 +130,34 @@ pub fn range_fn(
     bfv_params: &Arc<BfvParameters>,
     input: &Ciphertext,
     rlk_keys: &HashMap<usize, RelinearizationKey>,
+    sk: &SecretKey,
+    level_offset: usize,
 ) -> Ciphertext {
     // let mut now = std::time::SystemTime::now();
-    // all k_powers_of_x are at level 4
-    let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, 0);
+    // all k_powers_of_x are at level `level_offset` + 3
+    let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, level_offset);
     // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
     // now = std::time::SystemTime::now();
     // m = x^256
-    // all k_powers_of_m are at level 8
-    let k_powers_of_m = powers_of_x(&k_powers_of_x[255], 256, bfv_params, rlk_keys, 4);
+    // all k_powers_of_m are at level `level_offset` + 6
+    let k_powers_of_m = powers_of_x(
+        &k_powers_of_x[255],
+        256,
+        bfv_params,
+        rlk_keys,
+        level_offset + 4,
+    );
     // println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
+
+    // unsafe {
+    //     dbg!(sk
+    //         .measure_noise(&k_powers_of_x[k_powers_of_x.len() - 1])
+    //         .unwrap());
+    //     dbg!(sk
+    //         .measure_noise(&k_powers_of_m[k_powers_of_m.len() - 1])
+    //         .unwrap());
+    // }
 
     for p in &mut k_powers_of_x {
         for _ in 0..4 {
@@ -160,7 +177,7 @@ pub fn range_fn(
             let c = coeffs[(i * 256) + (j - 1)];
             let c_pt = Plaintext::try_encode(
                 &vec![c; bfv_params.degree()],
-                Encoding::simd_at_level(8),
+                Encoding::simd_at_level(level_offset + 8),
                 bfv_params,
             )
             .unwrap();
@@ -173,6 +190,11 @@ pub fn range_fn(
                 sum += &scalar_product;
             }
         }
+
+        // unsafe {
+        //     dbg!("sum noise: ", sk.measure_noise(&sum));
+        // }
+
         // println!(" sum for index {} {:?}", i, now.elapsed().unwrap());
 
         // now = std::time::SystemTime::now();
@@ -190,7 +212,7 @@ pub fn range_fn(
         if i != 0 {
             // mul and add
             let mut p = &k_powers_of_m[i - 1] * &sum;
-            let rlk = rlk_keys.get(&8).unwrap();
+            let rlk = rlk_keys.get(&(level_offset + 8)).unwrap();
             rlk.relinearizes(&mut p).unwrap();
 
             total += &p
@@ -198,6 +220,9 @@ pub fn range_fn(
             total = sum;
         }
         // println!(" total calc {} {:?}", i, now.elapsed().unwrap());
+        // unsafe {
+        //     dbg!("total noise: ", sk.measure_noise(&total));
+        // }
     }
 
     total = -total;
@@ -213,6 +238,7 @@ pub fn decrypt_pvw(
     mut ct_pvw_sk: Vec<Ciphertext>,
     rotation_key: GaloisKey,
     clues: Vec<PVWCiphertext>,
+    sk: &SecretKey,
 ) -> Vec<Ciphertext> {
     debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
 
@@ -240,6 +266,10 @@ pub fn decrypt_pvw(
 
             // rotate left by 1
             ct_pvw_sk[ell_index] = rotation_key.relinearize(&ct_pvw_sk[ell_index]).unwrap();
+
+            // unsafe {
+            //     dbg!(sk.measure_noise(&sk_a[ell_index]));
+            // }
         }
     }
 
@@ -253,6 +283,11 @@ pub fn decrypt_pvw(
         let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
 
         d[ell_index] = &(-&sk_a[ell_index]) + &b_ell;
+    }
+
+    // reduce noise of cts in d
+    for v in &mut d {
+        v.mod_switch_to_next_level();
     }
 
     d
@@ -288,10 +323,6 @@ pub fn inner_sum(
 /// in `poly_degree` coefficients
 /// into `poly_degree` ciphertexts
 /// encrypting each coefficient value.
-///
-/// TODO: enable batch processing since
-/// unpacking 2**15 ciphertexts in one
-/// go is huge load on memory
 pub fn pv_unpack(
     bfv_params: &Arc<BfvParameters>,
     rot_keys: &HashMap<usize, GaloisKey>,
@@ -299,12 +330,14 @@ pub fn pv_unpack(
     expansion_size: usize,
     offset: usize,
     sk: &SecretKey,
+    level: usize,
 ) -> Vec<Ciphertext> {
     // let mut now = std::time::SystemTime::now();
 
     let mut select = vec![0u64; bfv_params.degree()];
     select[0] = 1;
-    let select_pt = Plaintext::try_encode(&select, Encoding::simd(), bfv_params).unwrap();
+    let select_pt =
+        Plaintext::try_encode(&select, Encoding::simd_at_level(level), bfv_params).unwrap();
 
     let mut pv = vec![];
     for i in offset..(expansion_size + offset) {
@@ -323,13 +356,16 @@ pub fn pv_unpack(
         }
 
         let mut value_vec = &*pv_ct * &select_pt;
-        dbg!(
-            Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
-        );
-        unsafe {
-            dbg!(sk.measure_noise(&pv_ct));
-        }
+        // dbg!(
+        //     Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
+        // );
+        // unsafe {
+        //     dbg!(sk.measure_noise(&pv_ct));
+        // }
         value_vec = inner_sum(bfv_params, &value_vec, rot_keys);
+        // unsafe {
+        //     dbg!(sk.measure_noise(&value_vec));
+        // }
         pv.push(value_vec);
     }
 
@@ -426,13 +462,13 @@ pub fn finalise_combinations(
 mod tests {
     use super::*;
     use crate::client::gen_pvw_sk_cts;
-    use crate::utils::{powers_of_x_poly, range_fn_poly, rot_to_exponent};
+    use crate::utils::{gen_rlk_keys, powers_of_x_poly, range_fn_poly, rot_to_exponent};
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use itertools::izip;
 
     #[test]
     fn test_decrypt_pvw() {
-        let poly_degree = DEGREE;
+        let poly_degree = 1024;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -465,7 +501,7 @@ mod tests {
         // encrypt values
         let mut clues = vec![];
         let mut rng = thread_rng();
-        for i in 0..DEGREE {
+        for i in 0..poly_degree {
             let m = Uniform::new(0, 2)
                 .sample_iter(rng.clone())
                 .take(pvw_params.ell)
@@ -483,8 +519,23 @@ mod tests {
             GaloisKey::new(&bfv_sk, rot_to_exponent(1, &bfv_params), 0, 0, &mut rng).unwrap();
 
         let now = std::time::SystemTime::now();
-        let res = decrypt_pvw(&bfv_params, &pvw_params, pvw_sk_cts, rot_key, clues_ct);
+        let mut res = decrypt_pvw(
+            &bfv_params,
+            &pvw_params,
+            pvw_sk_cts,
+            rot_key,
+            clues_ct,
+            &bfv_sk,
+        );
         println!("decrypt_pvw took {:?}", now.elapsed());
+
+        // reduce noise of res cts
+        for r in &mut res {
+            r.mod_switch_to_next_level();
+            unsafe {
+                dbg!(bfv_sk.measure_noise(&r));
+            }
+        }
 
         let res = res
             .iter()
@@ -508,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_range_fn_ct() {
-        let poly_degree = DEGREE;
+        let poly_degree = 8;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -520,30 +571,24 @@ mod tests {
                 // .set_moduli_sizes(&vec![
                 //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
                 // ])
-                .set_moduli(&MODULI_OMR[..])
+                .set_moduli(&MODULI_OMR[..10])
                 .build()
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        let mut now = std::time::SystemTime::now();
-        let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
-        for i in 0..bfv_params.max_level() {
-            let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
-            rlk_keys.insert(i, rlk);
-        }
-        println!("RLK gen took {:?}", now.elapsed().unwrap());
+        let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
 
         let X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
             .take(poly_degree)
             .collect_vec();
         let X_bin = X.iter().map(|v| (*v >= 32768u64) as u64).collect_vec();
-        let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
+        let pt = Plaintext::try_encode(&X, Encoding::simd_at_level(1), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
-        now = std::time::SystemTime::now();
-        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys);
+        let mut now = std::time::SystemTime::now();
+        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, &bfv_sk, 1);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
@@ -583,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn power_of_x() {
+    fn test_power_of_x() {
         let degree = DEGREE;
         let t = MODULI_OMR_PT[0];
 
@@ -598,11 +643,7 @@ mod tests {
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
-        for i in 0..bfv_params.max_level() {
-            let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
-            rlk_keys.insert(i, rlk);
-        }
+        let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
 
         let k_degree = 256;
 
@@ -610,11 +651,11 @@ mod tests {
             .sample_iter(rng.clone())
             .take(degree)
             .collect_vec();
-        let pt = Plaintext::try_encode(&X, Encoding::simd(), &bfv_params).unwrap();
+        let pt = Plaintext::try_encode(&X, Encoding::simd_at_level(1), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         // let mut now = std::time::SystemTime::now();
-        let powers_ct = powers_of_x(&ct, k_degree, &bfv_params, &rlk_keys, 0);
+        let powers_ct = powers_of_x(&ct, k_degree, &bfv_params, &rlk_keys, 1);
         // println!(" Final power of X {:?}", now.elapsed().unwrap());
 
         // plaintext evaluation of X
@@ -631,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_pv_unpack() {
-        let degree = 8;
+        let degree = DEGREE;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -640,48 +681,71 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(degree)
                 .set_plaintext_modulus(t)
-                // .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 3..])
-                .set_moduli_sizes(&[60, 60, 60])
+                .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 3..])
+                // .set_moduli_sizes(&[60, 30, 60])
                 .build()
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
+        let distr = Uniform::new(0u64, t);
+        let values = distr.sample_iter(rng.clone()).take(degree).collect_vec();
+        let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
+
+        // let's level down by 1 to match our use-case
+        let mut ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+        ct.mod_switch_to_next_level();
+
         // rotation keys
+        let ct_level = 1;
+        let ksk_level = 0;
         let mut rot_keys = HashMap::<usize, GaloisKey>::new();
         let mut i = 1;
         while i < bfv_params.degree() / 2 {
             let exponent = rot_to_exponent(i as u64, &bfv_params);
             rot_keys.insert(
                 i,
-                GaloisKey::new(&bfv_sk, exponent, 0, 0, &mut rng).unwrap(),
+                GaloisKey::new(&bfv_sk, exponent, ct_level, ksk_level, &mut rng).unwrap(),
             );
             i *= 2;
         }
         rot_keys.insert(
             bfv_params.degree() * 2 - 1,
-            GaloisKey::new(&bfv_sk, bfv_params.degree() * 2 - 1, 0, 0, &mut rng).unwrap(),
+            GaloisKey::new(
+                &bfv_sk,
+                bfv_params.degree() * 2 - 1,
+                ct_level,
+                ksk_level,
+                &mut rng,
+            )
+            .unwrap(),
         );
 
-        let distr = Uniform::new(0u64, t);
-        let values = distr.sample_iter(rng.clone()).take(degree).collect_vec();
-        let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
-
-        let mut ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
-
-        let mut now = std::time::SystemTime::now();
-        let batch_size = 8;
+        let batch_size = 32;
         let mut offset = 0;
         let mut unpacked_cts: Vec<Ciphertext> = vec![];
+
+        let mut now = std::time::SystemTime::now();
+        let mut total_time = std::time::Duration::ZERO;
         for i in 0..(degree / batch_size) {
             now = std::time::SystemTime::now();
-            let res = pv_unpack(&bfv_params, &rot_keys, &mut ct, batch_size, offset, &bfv_sk);
-            println!("pv_unpack took {:?}", now.elapsed());
+            let res = pv_unpack(
+                &bfv_params,
+                &rot_keys,
+                &mut ct,
+                batch_size,
+                offset,
+                &bfv_sk,
+                1,
+            );
+            println!("pv_unpack for batch {} took {:?}", i, now.elapsed());
+            total_time += now.elapsed().unwrap();
 
             offset += batch_size;
             unpacked_cts.extend(res);
         }
-        println!("{:?}", values);
+        println!("pv_unpack in total took {:?}", total_time);
+
         unpacked_cts.iter().enumerate().for_each(|(index, u_ct)| {
             let pt = bfv_sk.try_decrypt(&u_ct).unwrap();
             let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();

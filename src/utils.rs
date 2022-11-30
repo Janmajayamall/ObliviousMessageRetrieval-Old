@@ -1,5 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use fhe::bfv::BfvParameters;
+use fhe::bfv::{BfvParameters, RelinearizationKey, SecretKey};
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
     zq::Modulus,
@@ -7,10 +7,10 @@ use fhe_math::{
 use itertools::{Itertools, MultiProduct};
 use rand::distributions::Uniform;
 use rand::{thread_rng, Rng};
-use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::vec;
+use std::{collections::HashMap, fs::File};
 
 pub fn read_range_coeffs(path: &str) -> Vec<u64> {
     let mut file = File::open(path).unwrap();
@@ -290,6 +290,30 @@ pub fn range_fn_poly(ctx: &Arc<Context>, input: &Poly, poly_degree: usize) -> Po
     total_sum = -total_sum;
 
     total_sum
+}
+
+pub fn gen_rlk_keys(
+    bfv_params: &Arc<BfvParameters>,
+    sk: &SecretKey,
+) -> HashMap<usize, RelinearizationKey> {
+    let mut rng = thread_rng();
+    let mut keys = HashMap::<usize, RelinearizationKey>::new();
+
+    let mut now = std::time::SystemTime::now();
+    for i in 0..bfv_params.max_level() {
+        let key_level = {
+            if i == 0 {
+                0
+            } else {
+                i - 1
+            }
+        };
+        let rlk = RelinearizationKey::new_leveled(sk, i, key_level, &mut rng).unwrap();
+        keys.insert(i, rlk);
+    }
+    println!("RLK gen took {:?}", now.elapsed().unwrap());
+
+    keys
 }
 
 #[cfg(test)]

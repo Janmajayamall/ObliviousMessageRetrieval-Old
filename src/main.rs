@@ -90,7 +90,7 @@ fn run() {
             } else {
                 let tmp_sk = PVWSecretKey::gen_sk(&pvw_params);
                 let tmp_pk = tmp_sk.public_key();
-                pvw_pk.encrypt(vec![0, 0, 0, 0])
+                tmp_pk.encrypt(vec![1, 1, 1, 1])
             }
         })
         .collect_vec();
@@ -100,9 +100,17 @@ fn run() {
 
     // run detection
     dbg!("Running decrypt_pvw");
-    let mut decrypted_clues = decrypt_pvw(&bfv_params, &pvw_params, ct_pvw_sk, top_rot_key, clues);
-
-    for _ in 0..3 {}
+    let mut decrypted_clues = decrypt_pvw(
+        &bfv_params,
+        &pvw_params,
+        ct_pvw_sk,
+        top_rot_key,
+        clues,
+        &bfv_sk,
+    );
+    unsafe {
+        dbg!("Noise in d:", bfv_sk.measure_noise(&decrypted_clues[0]));
+    }
 
     // relinearization keys at all levels
     dbg!("Generating rlk keys");
@@ -112,17 +120,34 @@ fn run() {
         rlk_keys.insert(i, rlk);
     }
 
-    unsafe {
-        dbg!("Noise:", bfv_sk.measure_noise(&decrypted_clues[0]));
+    dbg!("Evaluating range_fn for 0..ell");
+    let mut final_res = Ciphertext::zero(&bfv_params);
+    let mut flag = false;
+    let mut c_level = 8;
+    for i in 0..pvw_params.ell {
+        let range_res = range_fn(&bfv_params, &decrypted_clues[i], &rlk_keys, &bfv_sk, 1);
+
+        if !flag {
+            final_res = range_res;
+            flag = false;
+        } else {
+            final_res = &final_res * &range_res;
+            rlk_keys
+                .get(&c_level)
+                .unwrap()
+                .relinearizes(&mut final_res)
+                .unwrap();
+            final_res.mod_switch_to_next_level();
+            c_level += 1;
+        }
     }
 
-    dbg!("Evaluating range_fn");
-    // let range_res = range_fn(&bfv_params, &decrypted_clues[0], &rlk_keys);
-    let range_res_pt = bfv_sk.try_decrypt(&decrypted_clues[0]).unwrap();
-    let range_res = Vec::<u64>::try_decode(&range_res_pt, Encoding::simd()).unwrap();
+    let final_res_pt = bfv_sk.try_decrypt(&final_res).unwrap();
+    let final_res = Vec::<u64>::try_decode(&final_res_pt, Encoding::simd()).unwrap();
+
     let mut res_indices = vec![];
-    range_res.iter().enumerate().for_each(|(index, bit)| {
-        if *bit >= 32768 {
+    final_res.iter().enumerate().for_each(|(index, bit)| {
+        if *bit == 1 {
             res_indices.push(index);
         }
     });
