@@ -19,6 +19,22 @@ pub fn read_range_coeffs(path: &str) -> Vec<u64> {
     buf
 }
 
+pub fn mul_many_poly(values: &mut Vec<Poly>) {
+    while values.len() != 1 {
+        let mut mid = values.len() / 2;
+        for i in 0..mid {
+            values[i] = &values[i] * &values[mid + i];
+        }
+
+        if values.len() % 2 != 0 {
+            values[mid] = values.last().unwrap().clone();
+            mid += 1;
+        }
+
+        values.truncate(mid);
+    }
+}
+
 pub fn precompute_range_coeffs() {
     // precompute coefficients
     //

@@ -21,6 +21,40 @@ use std::{fs::File, io::Write, path::Path, vec};
 use crate::pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
 use crate::utils::read_range_coeffs;
 
+pub fn mul_many(
+    values: &mut Vec<Ciphertext>,
+    rlk_keys: &HashMap<usize, RelinearizationKey>,
+    mut level_offset: usize,
+) {
+    let mut counter = 0usize;
+    while values.len() != 1 {
+        let mut mid = values.len() / 2;
+
+        for i in 0..mid {
+            values[i] = &values[i] * &values[mid + i];
+            rlk_keys
+                .get(&level_offset)
+                .unwrap()
+                .relinearizes(&mut values[i])
+                .unwrap();
+        }
+
+        if values.len() % 2 != 0 {
+            values[mid] = values.last().unwrap().clone();
+            mid += 1;
+        }
+        values.truncate(mid);
+
+        counter += 1;
+        if counter & 1 == 1 {
+            level_offset += 1;
+            for i in 0..values.len() {
+                values[i].mod_switch_to_next_level();
+            }
+        }
+    }
+}
+
 pub fn powers_of_x(
     input: &Ciphertext,
     degree: usize,
@@ -887,5 +921,42 @@ mod tests {
             .collect();
 
         assert!(uncompressed == pv_values);
+    }
+
+    #[test]
+    fn test_mul_many() {
+        let mut rng = thread_rng();
+        let degree = 512;
+        let t = MODULI_OMR_PT[0];
+
+        let mut rng = thread_rng();
+
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(t)
+                // .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 2..])
+                .set_moduli_sizes(&[60, 60, 60, 60, 60])
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+        let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+
+        let mul_count = 5;
+        let pt_modulus = Modulus::new(bfv_params.plaintext()).unwrap();
+        let mut cts: Vec<Ciphertext> = vec![];
+        for i in 0..mul_count {
+            // let vals = pt_modulus.random_vec(bfv_params.degree(), &mut rng);
+            let vals = vec![i + 1u64; bfv_params.degree()];
+            let pt = Plaintext::try_encode(&vals, Encoding::simd_at_level(1), &bfv_params).unwrap();
+            cts.push(bfv_sk.try_encrypt(&pt, &mut rng).unwrap());
+        }
+
+        mul_many(&mut cts, &rlk_keys, 1);
+        dbg!(
+            Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&cts[0]).unwrap(), Encoding::simd())
+                .unwrap()
+        );
     }
 }
