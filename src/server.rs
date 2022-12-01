@@ -966,8 +966,9 @@ mod tests {
 
         // values of powers_ct_m are incorrect for DEGREE >= 2 ** 13. I suspect it's
         // because of accumulated noise in powers_ct_x[255] (powers_ct_x[255] is input
-        // to powers_of_x fn to calculate powers_ct_m). However, I am not sure why
-        // DEGREE should affect the noise.
+        // to powers_of_x fn to calculate powers_ct_m). Moreover, everything works fine
+        // if we increase the moduli size (by increasing modulus_count to 12 or more).
+        // However, I am not sure why DEGREE should affect the noise.
         izip!(powers_m.iter(), powers_ct_m.iter()).for_each(|(p, ct)| {
             let pt = bfv_sk.try_decrypt(ct).unwrap();
             let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
