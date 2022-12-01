@@ -300,7 +300,7 @@ pub fn gen_rlk_keys(
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
 
     let mut now = std::time::SystemTime::now();
-    for i in 0..bfv_params.max_level() {
+    for i in 0..(bfv_params.max_level() + 1) {
         let key_level = {
             if i == 0 {
                 0

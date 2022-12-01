@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
+use core::num;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
@@ -134,13 +135,13 @@ pub fn range_fn(
     level_offset: usize,
 ) -> Ciphertext {
     // let mut now = std::time::SystemTime::now();
-    // all k_powers_of_x are at level `level_offset` + 3
+    // all k_powers_of_x are at level `level_offset` + 4
     let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, level_offset);
     // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
     // now = std::time::SystemTime::now();
     // m = x^256
-    // all k_powers_of_m are at level `level_offset` + 6
+    // all k_powers_of_m are at level `level_offset` + 8
     let k_powers_of_m = powers_of_x(
         &k_powers_of_x[255],
         256,
@@ -468,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_decrypt_pvw() {
-        let poly_degree = 1024;
+        let poly_degree = DEGREE;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -529,11 +530,10 @@ mod tests {
         );
         println!("decrypt_pvw took {:?}", now.elapsed());
 
-        // reduce noise of res cts
-        for r in &mut res {
-            r.mod_switch_to_next_level();
+        // measure noise of res cts
+        for r in &res {
             unsafe {
-                dbg!(bfv_sk.measure_noise(&r));
+                dbg!(bfv_sk.measure_noise(r).unwrap());
             }
         }
 
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_range_fn_ct() {
-        let poly_degree = 8;
+        let poly_degree = 64;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -568,10 +568,8 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(poly_degree)
                 .set_plaintext_modulus(t)
-                // .set_moduli_sizes(&vec![
-                //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
-                // ])
-                .set_moduli(&MODULI_OMR[..10])
+                // .set_moduli_sizes(&vec![60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60])
+                .set_moduli(&MODULI_OMR[..12])
                 .build()
                 .unwrap(),
         );
@@ -591,6 +589,10 @@ mod tests {
         let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, &bfv_sk, 1);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
+
+        unsafe {
+            dbg!(bfv_sk.measure_noise(&res_ct));
+        }
 
         assert_eq!(
             Vec::<u64>::try_decode(&res_pt, Encoding::simd()).unwrap(),
@@ -637,7 +639,7 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(degree)
                 .set_plaintext_modulus(t)
-                .set_moduli(MODULI_OMR)
+                .set_moduli(&MODULI_OMR[..11])
                 .build()
                 .unwrap(),
         );
@@ -657,17 +659,32 @@ mod tests {
         // let mut now = std::time::SystemTime::now();
         let powers_ct = powers_of_x(&ct, k_degree, &bfv_params, &rlk_keys, 1);
         // println!(" Final power of X {:?}", now.elapsed().unwrap());
+        let powers_ct_m = powers_of_x(&powers_ct[255], 256, &bfv_params, &rlk_keys, 5);
+
+        unsafe {
+            dbg!(bfv_sk.measure_noise(&powers_ct[0]));
+            dbg!(bfv_sk.measure_noise(&powers_ct[255]));
+            dbg!(bfv_sk.measure_noise(&powers_ct_m[0]));
+            dbg!(bfv_sk.measure_noise(&powers_ct_m[255]));
+        }
 
         // plaintext evaluation of X
         let t_ctx = Arc::new(Context::new(&[t], degree).unwrap());
         let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
         let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree);
+        let powers_m = powers_of_x_poly(&t_ctx, &powers[255], k_degree);
 
         izip!(powers.iter(), powers_ct.iter()).for_each(|(p, ct)| {
             let pt = bfv_sk.try_decrypt(ct).unwrap();
             let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
             assert_eq!(pt, p.coefficients().to_slice().unwrap());
-        })
+        });
+
+        // izip!(powers_m.iter(), powers_ct_m.iter()).for_each(|(p, ct)| {
+        //     let pt = bfv_sk.try_decrypt(ct).unwrap();
+        //     let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+        //     assert_eq!(pt, p.coefficients().to_slice().unwrap());
+        // })
     }
 
     #[test]
@@ -887,5 +904,74 @@ mod tests {
             .collect();
 
         assert!(uncompressed == pv_values);
+    }
+    #[test]
+    fn strange() {
+        let degree = 8192;
+        let t = MODULI_OMR_PT[0];
+
+        let modulus_count = 11;
+
+        let mut rng = thread_rng();
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(degree)
+                .set_plaintext_modulus(t)
+                // we choose the first `modulus_count` values from MODULI_OMR
+                .set_moduli(&MODULI_OMR[..modulus_count])
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+        let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+
+        let k_degree = 256;
+
+        let X = Uniform::new(0u64, 65537)
+            .sample_iter(rng.clone())
+            .take(degree)
+            .collect_vec();
+        let pt = Plaintext::try_encode(&X, Encoding::simd_at_level(1), &bfv_params).unwrap();
+        let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
+
+        // let mut now = std::time::SystemTime::now();
+        // arr with values X, X^2, ..., X^256
+        let powers_ct_x = powers_of_x(&ct, k_degree, &bfv_params, &rlk_keys, 1);
+        // println!(" Final power of X {:?}", now.elapsed().unwrap());
+        // arr with values M, M^2, ..., M^256, where M = X^256
+        let powers_ct_m = powers_of_x(&powers_ct_x[255], 256, &bfv_params, &rlk_keys, 5);
+
+        unsafe {
+            dbg!(bfv_sk.measure_noise(&powers_ct_x[0]));
+            dbg!(bfv_sk.measure_noise(&powers_ct_x[255]));
+            dbg!(bfv_sk.measure_noise(&powers_ct_m[0]));
+            dbg!(bfv_sk.measure_noise(&powers_ct_m[255]));
+        }
+
+        // `powers_of_x_poly` does the same thing as `powers_of_x` but with
+        // polynomials. We check correctness of `powers_of_x` using `powers_of_x_poly`
+        let t_ctx = Arc::new(Context::new(&[t], degree).unwrap());
+        let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
+        let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree);
+        let powers_m = powers_of_x_poly(&t_ctx, &powers[255], k_degree);
+
+        // values of powers_ct_x are always correct irrespective of what
+        // DEGREE value we use.
+        izip!(powers.iter(), powers_ct_x.iter()).for_each(|(p, ct)| {
+            let pt = bfv_sk.try_decrypt(ct).unwrap();
+            let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+            assert_eq!(pt, p.coefficients().to_slice().unwrap());
+        });
+
+        // values of powers_ct_m are incorrect for DEGREE >= 2 ** 13. I suspect it's
+        // because of accumulated noise in powers_ct_x[255] (powers_ct_x[255] is input
+        // to powers_of_x fn to calculate powers_ct_m). However, I am not sure why
+        // DEGREE should affect the noise.
+        izip!(powers_m.iter(), powers_ct_m.iter()).for_each(|(p, ct)| {
+            let pt = bfv_sk.try_decrypt(ct).unwrap();
+            let pt = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+            assert_eq!(pt, p.coefficients().to_slice().unwrap());
+        })
     }
 }
