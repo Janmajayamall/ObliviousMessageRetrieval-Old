@@ -15,7 +15,7 @@ use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use rand::{Rng, RngCore};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::vec;
 
@@ -95,7 +95,7 @@ fn run() {
         }
     }
     pertinent_indices.sort();
-    let mut pertinent_indices = vec![2, 4, 6];
+    // let mut pertinent_indices = vec![2, 4, 6];
     println!("Pertinent indices {:?}", pertinent_indices);
 
     println!("Generating clues");
@@ -267,16 +267,20 @@ fn run() {
     let rhs = construct_rhs(rhs_vals, m, payload_size, bfv_params.plaintext());
     let vals = solve_equations(lhs, rhs, bfv_params.plaintext());
 
-    dbg!(&rows.1[2]);
-    dbg!(&rows.1[4]);
-    dbg!(&rows.1[6]);
-    dbg!("//////");
-    dbg!(vals);
+    let mut expected_dataset = HashSet::new();
+    pertinent_indices.iter().for_each(|i| {
+        expected_dataset.insert(rows.1[*i].clone());
+    });
 
-    // println!("{:?}", pertinent_indices);
-    // println!("{:?}", res_indices);
+    let mut res_dataset = HashSet::new();
+    vals.iter().for_each(|val| {
+        if *val != vec![0; payload_size] {
+            res_dataset.insert(val.clone());
+        }
+    });
 
-    // assert!(pertinent_indices == res_indices);
+    assert_eq!(expected_dataset, res_dataset);
+    println!("OMR works!");
 }
 
 fn main() {
