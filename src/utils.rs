@@ -41,22 +41,22 @@ pub fn precompute_range_coeffs() {
     // Range function returns 1 if input > 65536 / 2
     // otherwise returns 0.
     let q = Modulus::new(65537).unwrap();
+    let r = 850;
     let mut coeffs = vec![];
     for i in 1..65537 {
         let mut sum = 0;
-        dbg!(i);
         for a in 0..65537 {
             // f(a) * a.pow(65536 - i)
-            if a >= 32768 {
-                sum = q.add(sum, q.pow(a, 65536 - i));
+            if a >= (q.modulus() - r) || a <= r {
+                sum = q.add(sum, q.mul(1, q.pow(a, 65536 - i)));
             }
         }
         coeffs.push(sum);
     }
-    let mut bug = [0u8; 65536 * 8];
-    LittleEndian::write_u64_into(&coeffs, &mut bug);
-    let mut f = File::create("params.bin").unwrap();
-    f.write_all(&bug);
+    let mut buf = [0u8; 65536 * 8];
+    LittleEndian::write_u64_into(&coeffs, &mut buf);
+    let mut f = File::create("params_850.bin").unwrap();
+    f.write_all(&buf);
 }
 
 pub fn rot_to_exponent(rot_by: u64, bfv_params: &Arc<BfvParameters>) -> usize {
@@ -277,9 +277,14 @@ pub fn powers_of_x_poly(
     outputs
 }
 
-pub fn range_fn_poly(ctx: &Arc<Context>, input: &Poly, poly_degree: usize) -> Poly {
+pub fn range_fn_poly(
+    ctx: &Arc<Context>,
+    input: &Poly,
+    poly_degree: usize,
+    params_path: &str,
+) -> Poly {
     // read coeffs
-    let coeffs = read_range_coeffs("params.bin");
+    let coeffs = read_range_coeffs(params_path);
     let k_degree = 256;
     let mut k_powers_of_x: Vec<Poly> = powers_of_x_poly(&ctx, &input, k_degree);
     // M = x^256
@@ -303,7 +308,10 @@ pub fn range_fn_poly(ctx: &Arc<Context>, input: &Poly, poly_degree: usize) -> Po
             total_sum += &p;
         }
     }
-    total_sum = -total_sum;
+
+    let one =
+        Poly::try_convert_from(vec![1; poly_degree], &ctx, false, Representation::Ntt).unwrap();
+    total_sum = -total_sum + one;
 
     total_sum
 }
@@ -337,6 +345,11 @@ mod tests {
     use super::*;
     use itertools::Itertools;
     use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+
+    #[test]
+    fn trial() {
+        precompute_range_coeffs();
+    }
 
     #[test]
     fn test_assign_buckets() {

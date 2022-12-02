@@ -166,15 +166,16 @@ pub fn range_fn(
     rlk_keys: &HashMap<usize, RelinearizationKey>,
     sk: &SecretKey,
     level_offset: usize,
+    params_path: &str,
 ) -> Ciphertext {
     // let mut now = std::time::SystemTime::now();
-    // all k_powers_of_x are at level `level_offset` + 3
+    // all k_powers_of_x are at level `level_offset` + 4
     let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, level_offset);
     // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
     // now = std::time::SystemTime::now();
     // m = x^256
-    // all k_powers_of_m are at level `level_offset` + 6
+    // all k_powers_of_m are at level `level_offset` + 8
     let k_powers_of_m = powers_of_x(
         &k_powers_of_x[255],
         256,
@@ -199,7 +200,7 @@ pub fn range_fn(
         }
     }
 
-    let coeffs = read_range_coeffs("params.bin");
+    let coeffs = read_range_coeffs(params_path);
 
     let mut total = Ciphertext::zero(bfv_params);
     for i in 0..256 {
@@ -259,7 +260,13 @@ pub fn range_fn(
         // }
     }
 
-    total = -total;
+    let one = Plaintext::try_encode(
+        &vec![1u64; bfv_params.degree()],
+        Encoding::simd_at_level(level_offset + 8),
+        bfv_params,
+    )
+    .unwrap();
+    total = &(-total) + &one;
     // total.mod_switch_to_next_level();
 
     total
@@ -308,11 +315,18 @@ pub fn decrypt_pvw(
     }
 
     // d = b - sk * a
+    let q = Modulus::new(pvw_params.q).unwrap();
     let mut d = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
     for ell_index in 0..pvw_params.ell {
         let mut b_ell = vec![0u64; clues.len()];
         for i in 0..clues.len() {
-            b_ell[i] = clues[i].b[ell_index];
+            // We shift decrypted value by q/4 so that if
+            // it's encryption of `0`, then resulting value
+            // is within [-r, r].
+            // Note that in range function we output 1 (i.e
+            // clue is pertinent) if decrypted value is within
+            // [-r, r]
+            b_ell[i] = q.sub(clues[i].b[ell_index], q.modulus() / 4);
         }
         let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
 
@@ -593,7 +607,7 @@ mod tests {
 
     #[test]
     fn test_range_fn_ct() {
-        let poly_degree = 8;
+        let poly_degree = DEGREE;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -605,24 +619,29 @@ mod tests {
                 // .set_moduli_sizes(&vec![
                 //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
                 // ])
-                .set_moduli(&MODULI_OMR[..10])
+                .set_moduli(&MODULI_OMR[..13])
                 .build()
                 .unwrap(),
         );
-        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+        let pvw_params = Arc::new(PVWParameters::default());
 
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
         let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
 
         let X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
             .take(poly_degree)
             .collect_vec();
-        let X_bin = X.iter().map(|v| (*v >= 32768u64) as u64).collect_vec();
+        let q = Modulus::new(pvw_params.q).unwrap();
+        let X_bin = X
+            .iter()
+            .map(|v| (*v <= 850 || *v >= (q.modulus() - 850)) as u64)
+            .collect_vec();
         let pt = Plaintext::try_encode(&X, Encoding::simd_at_level(1), &bfv_params).unwrap();
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         let mut now = std::time::SystemTime::now();
-        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, &bfv_sk, 1);
+        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, &bfv_sk, 1, "params_850.bin");
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
@@ -644,20 +663,20 @@ mod tests {
 
     #[test]
     fn test_range_fn_poly() {
-        let degree = DEGREE;
+        let degree = 8;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
 
         let ctx = Arc::new(Context::new(&[t], degree).unwrap());
-        let X = Uniform::new(0u64, t)
+        let mut X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
             .take(degree)
             .collect_vec();
         let pt_poly = Poly::try_convert_from(&X, &ctx, false, Representation::Ntt).unwrap();
 
         let now = std::time::SystemTime::now();
-        range_fn_poly(&ctx, &pt_poly, degree);
+        dbg!(range_fn_poly(&ctx, &pt_poly, degree, "params_850.bin"));
         println!(" Range fn poly {:?}", now.elapsed().unwrap());
     }
 

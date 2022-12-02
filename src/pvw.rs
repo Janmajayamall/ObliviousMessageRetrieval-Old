@@ -116,9 +116,13 @@ impl PVWSecretKey {
 
         let mut b = vec![vec![0u64; self.params.ell]; self.params.m];
         for m_i in 0..self.params.m {
-            let e = q.reduce_vec_i64(
-                &sample_vec_cbd(self.params.ell, self.params.variance, &mut rng).unwrap(),
-            );
+            // let e = q.reduce_vec_i64(
+            //     &sample_vec_cbd(self.params.ell, self.params.variance, &mut rng).unwrap(),
+            // );
+            let e = Uniform::new(0, 2u64)
+                .sample_iter(rng.clone())
+                .take(self.params.ell)
+                .collect_vec();
             for l_i in 0..self.params.ell {
                 let mut sum = 0u64;
                 for n_i in 0..self.params.n {
@@ -154,6 +158,31 @@ impl PVWSecretKey {
             .for_each(|v| *v = (*v >= self.params.q / 2) as u64);
         d
     }
+
+    pub fn decrypt_without_scaling(&self, ct: PVWCiphertext) -> Vec<u64> {
+        let q = Modulus::new(self.params.q).unwrap();
+
+        // b - sa
+        let mut d = vec![0u64; self.params.ell];
+        for ell_i in 0..self.params.ell {
+            let mut sum = 0;
+            for n_i in 0..self.params.n {
+                sum = q.add(sum, q.mul(self.key[ell_i][n_i], ct.a[n_i]));
+            }
+            // b_elli - sa_elli
+            d[ell_i] = q.sub(ct.b[ell_i], sum);
+        }
+
+        d.iter_mut().for_each(|v| {
+            if *v > (self.params.q / 4) - 850 && *v < (self.params.q / 4) + 850 {
+                *v = 0
+            } else {
+                *v = 1
+            }
+        });
+
+        d
+    }
 }
 
 #[cfg(test)]
@@ -185,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_but() {
+    fn study_probs() {
         let params = PVWParameters {
             n: 450,
             m: 100,
@@ -201,11 +230,28 @@ mod tests {
         let sk1 = PVWSecretKey::gen_sk(&params);
         let pk1 = sk1.public_key();
 
-        let distr = Uniform::new(0u64, 2);
-        let ct = pk1.encrypt(vec![1, 1, 1, 1]);
+        let ct = pk.encrypt(vec![0, 0, 0, 0]);
 
-        let d_m = sk.decrypt(ct);
+        let mut count = 0;
+        let mut count1 = 0;
+        for i in 0..100 {
+            let vals = Uniform::new(0u64, 2)
+                .sample_iter(rng.clone())
+                .take(4)
+                .collect_vec();
 
-        dbg!(d_m);
+            let ct = pk.encrypt(vec![0, 0, 0, 0]);
+            let ct1 = pk1.encrypt(vec![0, 0, 0, 0]);
+
+            if sk.decrypt_without_scaling(ct) == vec![0, 0, 0, 0] {
+                count += 1;
+            }
+
+            if sk.decrypt_without_scaling(ct1) == vec![0, 0, 0, 0] {
+                count1 += 1;
+            }
+        }
+        dbg!(count);
+        dbg!(count1);
     }
 }

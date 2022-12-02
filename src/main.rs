@@ -27,6 +27,9 @@ mod utils;
 use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey};
 use server::{decrypt_pvw, powers_of_x, pv_compress, pv_weights, range_fn};
 
+use crate::server::mul_many;
+use crate::utils::gen_rlk_keys;
+
 const MODULI_OMR: &[u64; 15] = &[
     268369921,
     549755486209,
@@ -80,17 +83,18 @@ fn run() {
         }
     }
     pertinent_indices.sort();
+    // let mut pertinent_indices = vec![10, 20, 30];
     println!("Pertinent indices {:?}", pertinent_indices);
 
     dbg!("Generating clues");
     let clues = (0..N)
         .map(|index| {
             if pertinent_indices.contains(&index) {
-                pvw_pk.encrypt(vec![1, 1, 1, 1])
+                pvw_pk.encrypt(vec![0, 0, 0, 0])
             } else {
                 let tmp_sk = PVWSecretKey::gen_sk(&pvw_params);
                 let tmp_pk = tmp_sk.public_key();
-                tmp_pk.encrypt(vec![1, 1, 1, 1])
+                tmp_pk.encrypt(vec![0, 0, 0, 0])
             }
         })
         .collect_vec();
@@ -114,35 +118,34 @@ fn run() {
 
     // relinearization keys at all levels
     dbg!("Generating rlk keys");
-    let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
-    for i in 0..bfv_params.max_level() {
-        let rlk = RelinearizationKey::new_leveled(&bfv_sk, i, i, &mut rng).unwrap();
-        rlk_keys.insert(i, rlk);
-    }
+    let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
 
     dbg!("Evaluating range_fn for 0..ell");
-    let mut final_res = Ciphertext::zero(&bfv_params);
+    let mut range_res_cts = vec![];
     let mut flag = false;
-    let mut c_level = 8;
     for i in 0..pvw_params.ell {
-        let range_res = range_fn(&bfv_params, &decrypted_clues[i], &rlk_keys, &bfv_sk, 1);
-
-        if !flag {
-            final_res = range_res;
-            flag = false;
-        } else {
-            final_res = &final_res * &range_res;
-            rlk_keys
-                .get(&c_level)
-                .unwrap()
-                .relinearizes(&mut final_res)
-                .unwrap();
-            final_res.mod_switch_to_next_level();
-            c_level += 1;
-        }
+        let range_res = range_fn(
+            &bfv_params,
+            &decrypted_clues[i],
+            &rlk_keys,
+            &bfv_sk,
+            1,
+            "params_850.bin",
+        );
+        range_res_cts.push(range_res);
     }
 
-    let final_res_pt = bfv_sk.try_decrypt(&final_res).unwrap();
+    mul_many(&mut range_res_cts, &rlk_keys, 9);
+    assert!(range_res_cts.len() == 1);
+
+    unsafe {
+        dbg!(
+            "final noise",
+            bfv_sk.measure_noise(&range_res_cts[0]).unwrap()
+        );
+    }
+
+    let final_res_pt = bfv_sk.try_decrypt(&range_res_cts[0]).unwrap();
     let final_res = Vec::<u64>::try_decode(&final_res_pt, Encoding::simd()).unwrap();
 
     let mut res_indices = vec![];
