@@ -27,9 +27,9 @@ mod utils;
 use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey};
 use server::{decrypt_pvw, powers_of_x, pv_compress, pv_weights, range_fn};
 
-use crate::client::pv_decompress;
-use crate::server::{mul_many, pv_unpack};
-use crate::utils::{gen_rlk_keys, gen_rot_keys};
+use crate::client::{construct_lhs, construct_rhs, pv_decompress};
+use crate::server::{finalise_combinations, mul_many, pv_unpack};
+use crate::utils::{assign_buckets, gen_rlk_keys, gen_rot_keys, random_data, solve_equations};
 
 const MODULI_OMR: &[u64; 15] = &[
     268369921,
@@ -75,6 +75,15 @@ fn run() {
 
     let mut level_offset = 0;
 
+    // in bits
+    let data_size = 128;
+    let payload_size = data_size / 16;
+
+    // for SRLC
+    let k = 50;
+    let m = k * 2;
+    let gamma = 5;
+
     // gen clues
     let N = DEGREE;
     let tmp = Uniform::new(0, N);
@@ -86,22 +95,22 @@ fn run() {
         }
     }
     pertinent_indices.sort();
-    // let mut pertinent_indices = vec![10, 20, 30];
+    let mut pertinent_indices = vec![2, 4, 6];
     println!("Pertinent indices {:?}", pertinent_indices);
 
     println!("Generating clues");
     let mut now = std::time::SystemTime::now();
-    let clues = (0..N)
+    let rows: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..N)
         .map(|index| {
             if pertinent_indices.contains(&index) {
-                pvw_pk.encrypt(vec![0, 0, 0, 0])
+                (pvw_pk.encrypt(vec![0, 0, 0, 0]), random_data(data_size))
             } else {
                 let tmp_sk = PVWSecretKey::gen_sk(&pvw_params);
                 let tmp_pk = tmp_sk.public_key();
-                tmp_pk.encrypt(vec![0, 0, 0, 0])
+                (tmp_pk.encrypt(vec![0, 0, 0, 0]), random_data(data_size))
             }
         })
-        .collect_vec();
+        .unzip();
     println!("Generating clues took: {:?}", now.elapsed().unwrap());
 
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
@@ -114,7 +123,7 @@ fn run() {
         &pvw_params,
         ct_pvw_sk,
         top_rot_key,
-        clues,
+        rows.0,
         &bfv_sk,
     );
     unsafe {
@@ -172,6 +181,7 @@ fn run() {
 
     let mut ct = range_res_cts[0].clone();
     let mut compressed_pv_ct = Ciphertext::zero(&bfv_params);
+    let mut rhs_ct = Ciphertext::zero(&bfv_params);
 
     // process rest of the operations in batches
     println!("Unpacking and compressing pv");
@@ -180,6 +190,9 @@ fn run() {
 
     let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, level_offset, level_offset - 1);
     let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, level_offset + 2, level_offset + 1);
+
+    let (assigned_buckets, assigned_bucket_weights) =
+        assign_buckets(m, gamma, bfv_params.plaintext(), N);
 
     for i in 0..N / batch_size {
         println!("Processing batch: {}", i);
@@ -207,6 +220,24 @@ fn run() {
         );
         println!("batch {} compress took {:?}", i, now.elapsed().unwrap());
 
+        now = std::time::SystemTime::now();
+        // pertinency_value * bucket_weights
+        let pv_by_weights = pv_weights(
+            &assigned_buckets,
+            &assigned_bucket_weights,
+            &unpacked_cts,
+            &rows.1,
+            payload_size,
+            &bfv_params,
+            batch_size,
+            gamma,
+            offset,
+            level_offset + 2,
+        );
+
+        finalise_combinations(&pv_by_weights, &mut rhs_ct);
+        println!("batch {} combinations took {:?}", i, now.elapsed().unwrap());
+
         offset += batch_size;
     }
 
@@ -214,17 +245,38 @@ fn run() {
 
     /// CLIENT SIDE
     let pv = pv_decompress(&bfv_params, &compressed_pv_ct, &bfv_sk);
-    let mut res_indices = vec![];
-    pv.iter().enumerate().for_each(|(index, bit)| {
-        if *bit == 1 {
-            res_indices.push(index);
-        }
-    });
+    // let mut res_indices = vec![];
+    // pv.iter().enumerate().for_each(|(index, bit)| {
+    //     if *bit == 1 {
+    //         res_indices.push(index);
+    //     }
+    // });
+    let rhs_vals = bfv_sk.try_decrypt(&rhs_ct).unwrap();
+    let rhs_vals = Vec::<u64>::try_decode(&rhs_vals, Encoding::simd()).unwrap();
 
-    println!("{:?}", pertinent_indices);
-    println!("{:?}", res_indices);
+    // solve linear equations
+    let lhs = construct_lhs(
+        &pv,
+        assigned_buckets,
+        assigned_bucket_weights,
+        m,
+        k,
+        gamma,
+        N,
+    );
+    let rhs = construct_rhs(rhs_vals, m, payload_size, bfv_params.plaintext());
+    let vals = solve_equations(lhs, rhs, bfv_params.plaintext());
 
-    assert!(pertinent_indices == res_indices);
+    dbg!(&rows.1[2]);
+    dbg!(&rows.1[4]);
+    dbg!(&rows.1[6]);
+    dbg!("//////");
+    dbg!(vals);
+
+    // println!("{:?}", pertinent_indices);
+    // println!("{:?}", res_indices);
+
+    // assert!(pertinent_indices == res_indices);
 }
 
 fn main() {

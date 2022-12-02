@@ -459,39 +459,41 @@ pub fn pv_compress(
 /// That is, for each payload, `PV[i] * a`, where `a` encodes
 /// `payload * weight` at respective bucket slots.
 pub fn pv_weights(
-    assigned_buckets: Vec<Vec<usize>>,
-    assigned_weights: Vec<Vec<u64>>,
+    assigned_buckets: &Vec<Vec<usize>>,
+    assigned_weights: &Vec<Vec<u64>>,
     pv: &Vec<Ciphertext>,
-    payloads: Vec<Vec<u64>>,
+    payloads: &Vec<Vec<u64>>,
     payload_size: usize,
     bfv_params: &Arc<BfvParameters>,
-    N: usize,
+    batch_size: usize,
     gamma: usize,
+    offset: usize,
+    level: usize,
 ) -> Vec<Ciphertext> {
     let q_mod = bfv_params.plaintext();
     let modulus = Modulus::new(q_mod).unwrap();
 
-    let mut products = vec![Ciphertext::zero(&bfv_params); N];
-    for row_index in 0..N {
+    let mut products = vec![Ciphertext::zero(&bfv_params); batch_size];
+    for row_index in 0..batch_size {
         let mut pt = vec![0u64; bfv_params.degree()];
         for i in 0..gamma {
             // think of single bucket as spanning across `payload_size`
             // no. of rows of plaintext vector
-            let bucket = assigned_buckets[row_index][i] * payload_size;
+            let bucket = assigned_buckets[row_index + offset][i] * payload_size;
 
             for chunk_index in 0..payload_size {
                 // payload chunk * weight
                 pt[bucket + chunk_index] = modulus.add(
                     pt[bucket + chunk_index],
                     modulus.mul(
-                        payloads[row_index][chunk_index],
-                        assigned_weights[row_index][i],
+                        payloads[row_index + offset][chunk_index],
+                        assigned_weights[row_index + offset][i],
                     ),
                 )
             }
         }
 
-        let pt = Plaintext::try_encode(&pt, Encoding::simd(), &bfv_params).unwrap();
+        let pt = Plaintext::try_encode(&pt, Encoding::simd_at_level(level), &bfv_params).unwrap();
         let product = &pv[row_index] * &pt;
         products[row_index] = product;
     }
@@ -499,16 +501,10 @@ pub fn pv_weights(
     products
 }
 
-pub fn finalise_combinations(
-    pv_weights: Vec<Ciphertext>,
-    bfv_params: &Arc<BfvParameters>,
-) -> Ciphertext {
-    let mut cmb = Ciphertext::zero(bfv_params);
+pub fn finalise_combinations(pv_weights: &Vec<Ciphertext>, rhs: &mut Ciphertext) {
     for i in 0..pv_weights.len() {
-        cmb = &cmb + &pv_weights[i];
+        *rhs += &pv_weights[i];
     }
-
-    cmb
 }
 
 #[cfg(test)]

@@ -89,13 +89,9 @@ pub fn construct_lhs(
     lhs
 }
 
-pub fn construct_rhs(values: Vec<u64>, m: usize, data_size: usize, q_mod: u64) -> Vec<Vec<u64>> {
-    let size = (64 - q_mod.leading_zeros() - 1) as usize;
-    debug_assert!(data_size % size == 0);
-    let bucket_size = data_size / size;
-
-    values[..m * bucket_size]
-        .chunks(bucket_size)
+pub fn construct_rhs(values: Vec<u64>, m: usize, payload_size: usize, q_mod: u64) -> Vec<Vec<u64>> {
+    values[..m * payload_size]
+        .chunks(payload_size)
         .map(|bucket| bucket.to_vec())
         .collect()
 }

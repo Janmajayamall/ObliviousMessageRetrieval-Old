@@ -5,7 +5,7 @@ use fhe_math::{
     zq::Modulus,
 };
 use itertools::{Itertools, MultiProduct};
-use rand::distributions::Uniform;
+use rand::{distributions::Uniform, prelude::Distribution};
 use rand::{thread_rng, Rng};
 use std::io::Write;
 use std::sync::Arc;
@@ -152,7 +152,7 @@ pub fn solve_equations(
         // Not solvable
         if pivot_rows[pi] == -1 {
             dbg!("OOPS");
-            dbg!(&pivot_rows);
+            // dbg!(&pivot_rows);
             break;
         }
 
@@ -180,9 +180,11 @@ pub fn solve_equations(
     let no_sols = rhs[0].len();
     let mut res = vec![vec![0u64; no_sols]; cols];
     for i in 0..cols {
-        let row = pivot_rows[i] as usize;
-        for j in 0..no_sols {
-            res[i][j] = modulus.mul(modulus.inv(lhs[row][i]).unwrap(), rhs[row][j]);
+        if pivot_rows[i] != -1 {
+            let row = pivot_rows[i] as usize;
+            for j in 0..no_sols {
+                res[i][j] = modulus.mul(modulus.inv(lhs[row][i]).unwrap(), rhs[row][j]);
+            }
         }
     }
     res
@@ -373,6 +375,17 @@ pub fn gen_rot_keys(
         .unwrap(),
     );
     keys
+}
+
+pub fn random_data(mut size_bits: usize) -> Vec<u64> {
+    assert!(size_bits.is_power_of_two());
+    let rng = thread_rng();
+
+    let chunks = size_bits / 16;
+    Uniform::new(0u64, 1 << 16)
+        .sample_iter(rng)
+        .take(chunks)
+        .collect()
 }
 
 #[cfg(test)]
