@@ -1,5 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use fhe::bfv::{BfvParameters, RelinearizationKey, SecretKey};
+use fhe::bfv::{BfvParameters, GaloisKey, RelinearizationKey, SecretKey};
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
     zq::Modulus,
@@ -337,6 +337,41 @@ pub fn gen_rlk_keys(
     }
     println!("RLK gen took {:?}", now.elapsed().unwrap());
 
+    keys
+}
+
+pub fn gen_rot_keys(
+    bfv_params: &Arc<BfvParameters>,
+    sk: &SecretKey,
+    ct_level: usize,
+    ksk_level: usize,
+) -> HashMap<usize, GaloisKey> {
+    let mut rng = thread_rng();
+    let mut keys = HashMap::<usize, GaloisKey>::new();
+    let mut i = 1;
+    while i < bfv_params.degree() / 2 {
+        let key = GaloisKey::new(
+            sk,
+            rot_to_exponent(i as u64, bfv_params),
+            ct_level,
+            ksk_level,
+            &mut rng,
+        )
+        .unwrap();
+        keys.insert(i, key);
+        i *= 2;
+    }
+    keys.insert(
+        bfv_params.degree() * 2 - 1,
+        GaloisKey::new(
+            sk,
+            bfv_params.degree() * 2 - 1,
+            ct_level,
+            ksk_level,
+            &mut rng,
+        )
+        .unwrap(),
+    );
     keys
 }
 

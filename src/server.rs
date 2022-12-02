@@ -374,6 +374,7 @@ pub fn inner_sum(
 pub fn pv_unpack(
     bfv_params: &Arc<BfvParameters>,
     rot_keys: &HashMap<usize, GaloisKey>,
+    inner_sum_rot_keys: &HashMap<usize, GaloisKey>,
     pv_ct: &mut Ciphertext,
     expansion_size: usize,
     offset: usize,
@@ -404,13 +405,17 @@ pub fn pv_unpack(
         }
 
         let mut value_vec = &*pv_ct * &select_pt;
-        // dbg!(
+
+        value_vec.mod_switch_to_next_level();
+        value_vec.mod_switch_to_next_level();
+        // println!(
+        //     "{:?}",
         //     Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
         // );
         // unsafe {
-        //     dbg!(sk.measure_noise(&pv_ct));
+        //     dbg!(sk.measure_noise(&value_vec));
         // }
-        value_vec = inner_sum(bfv_params, &value_vec, rot_keys);
+        value_vec = inner_sum(bfv_params, &value_vec, inner_sum_rot_keys);
         // unsafe {
         //     dbg!(sk.measure_noise(&value_vec));
         // }
@@ -510,7 +515,9 @@ pub fn finalise_combinations(
 mod tests {
     use super::*;
     use crate::client::gen_pvw_sk_cts;
-    use crate::utils::{gen_rlk_keys, powers_of_x_poly, range_fn_poly, rot_to_exponent};
+    use crate::utils::{
+        gen_rlk_keys, gen_rot_keys, powers_of_x_poly, range_fn_poly, rot_to_exponent,
+    };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use itertools::izip;
 
@@ -725,54 +732,34 @@ mod tests {
 
     #[test]
     fn test_pv_unpack() {
-        let degree = DEGREE;
+        let degree = 4096;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
-
+        dbg!(&MODULI_OMR[MODULI_OMR.len() - 4..]);
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(degree)
                 .set_plaintext_modulus(t)
-                .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 3..])
+                .set_moduli(&MODULI_OMR[MODULI_OMR.len() - 4..])
                 // .set_moduli_sizes(&[60, 30, 60])
                 .build()
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        let distr = Uniform::new(0u64, t);
-        let values = distr.sample_iter(rng.clone()).take(degree).collect_vec();
-        let pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
-
-        // let's level down by 1 to match our use-case
+        let values = Uniform::new(0u64, t)
+            .sample_iter(rng.clone())
+            .take(degree)
+            .collect_vec();
+        let pt = Plaintext::try_encode(&values, Encoding::simd_at_level(1), &bfv_params).unwrap();
         let mut ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
-        ct.mod_switch_to_next_level();
 
         // rotation keys
         let ct_level = 1;
-        let ksk_level = 0;
-        let mut rot_keys = HashMap::<usize, GaloisKey>::new();
+        let mut rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, ct_level, ct_level - 1);
+        let mut inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, ct_level + 2, ct_level + 1);
         let mut i = 1;
-        while i < bfv_params.degree() / 2 {
-            let exponent = rot_to_exponent(i as u64, &bfv_params);
-            rot_keys.insert(
-                i,
-                GaloisKey::new(&bfv_sk, exponent, ct_level, ksk_level, &mut rng).unwrap(),
-            );
-            i *= 2;
-        }
-        rot_keys.insert(
-            bfv_params.degree() * 2 - 1,
-            GaloisKey::new(
-                &bfv_sk,
-                bfv_params.degree() * 2 - 1,
-                ct_level,
-                ksk_level,
-                &mut rng,
-            )
-            .unwrap(),
-        );
 
         let batch_size = 32;
         let mut offset = 0;
@@ -785,6 +772,7 @@ mod tests {
             let res = pv_unpack(
                 &bfv_params,
                 &rot_keys,
+                &inner_sum_rot_keys,
                 &mut ct,
                 batch_size,
                 offset,
@@ -796,10 +784,21 @@ mod tests {
 
             offset += batch_size;
             unpacked_cts.extend(res);
+
+            unsafe {
+                dbg!("ct noise after: ", bfv_sk.measure_noise(&ct).unwrap());
+            }
         }
         println!("pv_unpack in total took {:?}", total_time);
 
         unpacked_cts.iter().enumerate().for_each(|(index, u_ct)| {
+            // unsafe {
+            //     println!(
+            //         "noise of ct at index {}: {} ",
+            //         index,
+            //         bfv_sk.measure_noise(&u_ct).unwrap()
+            //     );
+            // }
             let pt = bfv_sk.try_decrypt(&u_ct).unwrap();
             let v = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
             assert_eq!(v, vec![values[index]; degree]);
