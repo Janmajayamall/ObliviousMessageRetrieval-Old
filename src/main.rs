@@ -116,6 +116,17 @@ fn run() {
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
     let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
 
+    // relinearization keys at all levels
+    println!("Generating rlk keys");
+    let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+
+    // rotation keys
+    let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
+    let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
+
+    println!("///////// SERVER SIDE //////////");
+    let server_time = std::time::SystemTime::now();
+
     // run detection
     println!("Running decrypt_pvw");
     let mut decrypted_clues = decrypt_pvw(
@@ -126,18 +137,14 @@ fn run() {
         rows.0,
         &bfv_sk,
     );
-    unsafe {
-        println!(
-            "Noise in decrypted_clues[0]: {}",
-            bfv_sk.measure_noise(&decrypted_clues[0]).unwrap()
-        );
-    }
+    // unsafe {
+    //     println!(
+    //         "Noise in decrypted_clues[0]: {}",
+    //         bfv_sk.measure_noise(&decrypted_clues[0]).unwrap()
+    //     );
+    // }
     // because of decrypt
     level_offset += 1;
-
-    // relinearization keys at all levels
-    println!("Generating rlk keys");
-    let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
 
     println!("Evaluating range_fn for all ells");
     let mut range_res_cts = vec![];
@@ -166,18 +173,18 @@ fn run() {
     now = std::time::SystemTime::now();
     mul_many(&mut range_res_cts, &rlk_keys, level_offset);
     println!("Multiplication took {:?}", now.elapsed().unwrap());
-    assert!(range_res_cts.len() == 1);
+    // assert!(range_res_cts.len() == 1);
 
     // since length of range_res_cts = 4, mul_many
     // only consumes one level
     level_offset += 1; // 10
 
-    unsafe {
-        println!(
-            "Noise in ct: {}",
-            bfv_sk.measure_noise(&range_res_cts[0]).unwrap()
-        );
-    }
+    // unsafe {
+    //     println!(
+    //         "Noise in ct: {}",
+    //         bfv_sk.measure_noise(&range_res_cts[0]).unwrap()
+    //     );
+    // }
 
     let mut ct = range_res_cts[0].clone();
     let mut compressed_pv_ct = Ciphertext::zero(&bfv_params);
@@ -187,9 +194,6 @@ fn run() {
     println!("Unpacking and compressing pv");
     let batch_size = 32;
     let mut offset = 0;
-
-    let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, level_offset, level_offset - 1);
-    let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, level_offset + 2, level_offset + 1);
 
     let (assigned_buckets, assigned_bucket_weights) =
         assign_buckets(m, gamma, bfv_params.plaintext(), N);
@@ -240,10 +244,12 @@ fn run() {
 
         offset += batch_size;
     }
-
+    let server_time = server_time.elapsed().unwrap();
     level_offset += 2;
 
-    /// CLIENT SIDE
+    println!("///////// CLIENT SIDE //////////");
+    let client_time = std::time::SystemTime::now();
+
     let pv = pv_decompress(&bfv_params, &compressed_pv_ct, &bfv_sk);
     // let mut res_indices = vec![];
     // pv.iter().enumerate().for_each(|(index, bit)| {
@@ -267,6 +273,8 @@ fn run() {
     let rhs = construct_rhs(rhs_vals, m, payload_size, bfv_params.plaintext());
     let vals = solve_equations(lhs, rhs, bfv_params.plaintext());
 
+    let client_time = client_time.elapsed().unwrap();
+
     let mut expected_dataset = HashSet::new();
     pertinent_indices.iter().for_each(|i| {
         expected_dataset.insert(rows.1[*i].clone());
@@ -281,6 +289,10 @@ fn run() {
 
     assert_eq!(expected_dataset, res_dataset);
     println!("OMR works!");
+    println!(
+        "Server took: {:?}; Client took: {:?}",
+        server_time, client_time
+    );
 }
 
 fn main() {
