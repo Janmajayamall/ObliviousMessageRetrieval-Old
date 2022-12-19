@@ -466,35 +466,48 @@ pub fn pv_weights(
     payload_size: usize,
     bfv_params: &Arc<BfvParameters>,
     batch_size: usize,
+    ct_span_count: usize,
     gamma: usize,
     offset: usize,
     level: usize,
-) -> Vec<Ciphertext> {
+    degree: usize,
+) -> Vec<Vec<Ciphertext>> {
     let q_mod = bfv_params.plaintext();
     let modulus = Modulus::new(q_mod).unwrap();
 
-    let mut products = vec![Ciphertext::zero(&bfv_params); batch_size];
+    let mut products = vec![vec![Ciphertext::zero(&bfv_params); ct_span_count]; batch_size];
     for row_index in 0..batch_size {
-        let mut pt = vec![0u64; bfv_params.degree()];
+        let mut pt = vec![vec![0u64; bfv_params.degree()]; ct_span_count];
         for i in 0..gamma {
             // think of single bucket as spanning across `payload_size`
             // no. of rows of plaintext vector
-            let bucket = assigned_buckets[row_index + offset][i] * payload_size;
+            let start_row = assigned_buckets[row_index + offset][i] * payload_size;
 
-            for chunk_index in 0..payload_size {
+            for payload_index in 0..payload_size {
+                let row = start_row + i;
+                let span_col = row / degree;
+                let span_row = row % degree;
+
                 // payload chunk * weight
-                pt[bucket + chunk_index] = modulus.add(
-                    pt[bucket + chunk_index],
+                pt[span_col][span_row] = modulus.add(
+                    pt[span_col][span_row],
                     modulus.mul(
-                        payloads[row_index + offset][chunk_index],
+                        payloads[row_index + offset][payload_index],
                         assigned_weights[row_index + offset][i],
                     ),
                 )
             }
         }
 
-        let pt = Plaintext::try_encode(&pt, Encoding::simd_at_level(level), &bfv_params).unwrap();
-        let product = &pv[row_index] * &pt;
+        let product = pt
+            .iter()
+            .map(|col| {
+                let p = Plaintext::try_encode(col, Encoding::simd_at_level(level), &bfv_params)
+                    .unwrap();
+                &pv[row_index] * &p
+            })
+            .collect_vec();
+
         products[row_index] = product;
     }
 
