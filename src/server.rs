@@ -560,15 +560,71 @@ pub fn phase1(
     res
 }
 
-pub fn phase2() { 
-    
+/// Does the following on all cts in batches:
+/// 1. calls `pv_unpack`
+/// 2. compresses unpacked ct into PV ct
+/// 3. assigns weights to buckets
+pub fn phase2(
+    bfv_params: &Arc<BfvParameters>,
+    rot_keys: &HashMap<usize, GaloisKey>,
+    inner_sum_rot_keys: &HashMap<usize, GaloisKey>,
+    pertinency_cts: &mut [Ciphertext],
+    batch_size: usize,
+    degree: usize,
+    level: usize,
+    sk: &SecretKey,
+) -> Ciphertext {
+    debug_assert!(degree % batch_size == 0);
+    let f = pertinency_cts.len();
+    let mut pertinency_vectors: Vec<Ciphertext> = pertinency_cts
+        .par_iter_mut()
+        .zip(0..f)
+        .map(|(p_ct, core_index)| {
+            println!("Phase2...core_index: {}", core_index);
+
+            let mut pv = Ciphertext::zero(bfv_params);
+            let compress_offset = core_index * degree;
+            let mut offset = 0usize;
+
+            for _ in 0..degree / batch_size {
+                let unpacked_cts = pv_unpack(
+                    bfv_params,
+                    rot_keys,
+                    inner_sum_rot_keys,
+                    p_ct,
+                    batch_size,
+                    offset,
+                    sk,
+                    level,
+                );
+
+                pv_compress(
+                    bfv_params,
+                    &unpacked_cts,
+                    level + 2,
+                    batch_size,
+                    offset + compress_offset,
+                    &mut pv,
+                );
+
+                offset += batch_size;
+            }
+
+            pv
+        })
+        .collect();
+
+    for i in 1..pertinency_vectors.len() {
+        pertinency_vectors[0] = &pertinency_vectors[0] + &pertinency_vectors[i];
+    }
+
+    pertinency_vectors[0].clone()
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::client::gen_pvw_sk_cts;
+    use crate::client::{gen_pvw_sk_cts, pv_decompress};
     use crate::utils::{
         gen_clues, gen_pertinent_indices, gen_rlk_keys, gen_rot_keys, powers_of_x_poly,
         range_fn_poly, rot_to_exponent,
@@ -608,10 +664,12 @@ mod tests {
         let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
 
         let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+        let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
+        let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
 
         println!("Phase 1 starting...");
         let now = std::time::Instant::now();
-        let res = phase1(
+        let mut phase1_res = phase1(
             &bfv_params,
             &pvw_params,
             &ct_pvw_sk,
@@ -624,19 +682,47 @@ mod tests {
         );
         println!("Phase 1 took: {:?}", now.elapsed());
 
-        let vals = res.iter().flat_map(|ct| {
-            let pt = bfv_sk.try_decrypt(ct).unwrap();
-            Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
-        });
+        println!("Phase 2 starting...");
+        let now = std::time::Instant::now();
+        let res = phase2(
+            &bfv_params,
+            &rot_keys,
+            &inner_sum_rot_keys,
+            &mut phase1_res,
+            32,
+            DEGREE,
+            10,
+            &bfv_sk,
+        );
+        println!("Phase 2 took: {:?}", now.elapsed());
 
-        let mut final_pertinent_indices = vec![];
-        vals.enumerate().for_each(|(index, p)| {
-            if p == 1 {
-                final_pertinent_indices.push(index);
+        // let pt = bfv_sk.try_decrypt(&res).unwrap();
+        // let vals = Vec::<u64>::try_decode(&pt, Encoding::simd());
+
+        let decompressed = pv_decompress(&bfv_params, &res, &bfv_sk);
+        let mut pt_indices = vec![];
+        decompressed.iter().enumerate().for_each(|(index, b)| {
+            if *b == 1 {
+                pt_indices.push(index)
             }
         });
 
-        assert_eq!(pertinent_indices, final_pertinent_indices);
+        println!("{:?}", pertinent_indices);
+        println!("{:?}", pt_indices);
+
+        // let vals = res.iter().flat_map(|ct| {
+        //     let pt = bfv_sk.try_decrypt(ct).unwrap();
+        //     Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
+        // });
+
+        // let mut final_pertinent_indices = vec![];
+        // vals.enumerate().for_each(|(index, p)| {
+        //     if p == 1 {
+        //         final_pertinent_indices.push(index);
+        //     }
+        // });
+
+        // assert_eq!(pertinent_indices, final_pertinent_indices);
     }
 
     #[test]
