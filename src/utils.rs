@@ -5,12 +5,14 @@ use fhe_math::{
     zq::Modulus,
 };
 use itertools::{Itertools, MultiProduct};
-use rand::{distributions::Uniform, prelude::Distribution};
+use rand::{distributions::Uniform, prelude::Distribution, seq::index};
 use rand::{thread_rng, Rng};
 use std::io::Write;
 use std::sync::Arc;
 use std::vec;
 use std::{collections::HashMap, fs::File};
+
+use crate::pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
 
 pub fn read_range_coeffs(path: &str) -> Vec<u64> {
     let mut file = File::open(path).unwrap();
@@ -204,12 +206,6 @@ pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
         .collect()
 }
 
-pub fn gen_clues() {
-    let rng = thread_rng();
-    let N = 100000;
-    let payloads = gen_paylods(N);
-}
-
 /// test fn that simulates powers_of_x on plaintext
 /// for debugging
 pub fn powers_of_x_poly(
@@ -385,6 +381,38 @@ pub fn random_data(mut size_bits: usize) -> Vec<u64> {
     Uniform::new(0u64, 1 << 16)
         .sample_iter(rng)
         .take(chunks)
+        .collect()
+}
+
+pub fn gen_pertinent_indices(size: usize, set_size: usize) -> Vec<usize> {
+    let mut rng = thread_rng();
+    let distr = Uniform::new(0, set_size);
+    let mut indices = vec![];
+    while indices.len() != size {
+        let v = distr.sample(&mut rng);
+        if !indices.contains(&v) {
+            indices.push(v);
+        }
+    }
+    indices
+}
+
+pub fn gen_clues(
+    pvw_params: &Arc<PVWParameters>,
+    pvw_pk: &Arc<PublicKey>,
+    pertinent_indices: &Vec<usize>,
+    set_size: usize,
+) -> Vec<PVWCiphertext> {
+    let tmp_sk = PVWSecretKey::gen_sk(pvw_params);
+    let other = tmp_sk.public_key().encrypt(&[0, 0, 0, 0]);
+    (0..set_size)
+        .map(|index| {
+            if pertinent_indices.contains(&index) {
+                pvw_pk.encrypt(&[0, 0, 0, 0])
+            } else {
+                other.clone()
+            }
+        })
         .collect()
 }
 

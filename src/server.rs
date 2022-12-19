@@ -14,6 +14,7 @@ use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use rand::{Rng, RngCore};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{fs::File, io::Write, path::Path, vec};
@@ -277,8 +278,8 @@ pub fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &Arc<PVWParameters>,
     mut ct_pvw_sk: Vec<Ciphertext>,
-    rotation_key: GaloisKey,
-    clues: Vec<PVWCiphertext>,
+    rotation_key: &GaloisKey,
+    clues: &[PVWCiphertext],
     sk: &SecretKey,
 ) -> Vec<Ciphertext> {
     debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
@@ -314,9 +315,8 @@ pub fn decrypt_pvw(
         }
     }
 
-    // d = b - sk * a
+    // sk_a = b - sk * a
     let q = Modulus::new(pvw_params.q).unwrap();
-    let mut d = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
     for ell_index in 0..pvw_params.ell {
         let mut b_ell = vec![0u64; clues.len()];
         for i in 0..clues.len() {
@@ -330,15 +330,15 @@ pub fn decrypt_pvw(
         }
         let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
 
-        d[ell_index] = &(-&sk_a[ell_index]) + &b_ell;
+        sk_a[ell_index] = &(-&sk_a[ell_index]) + &b_ell;
     }
 
     // reduce noise of cts in d
-    for v in &mut d {
+    for v in &mut sk_a {
         v.mod_switch_to_next_level();
     }
 
-    d
+    sk_a
 }
 
 /// Computes sum of all slot values
@@ -507,15 +507,137 @@ pub fn finalise_combinations(pv_weights: &Vec<Ciphertext>, rhs: &mut Ciphertext)
     }
 }
 
+/// Does the following:
+/// 1. Calls `decrypt_pvw` to decrypt clues values    
+/// 2. Calls `range_fn` to reduce decrypted value to either 0 or 1.
+pub fn phase1(
+    bfv_params: &Arc<BfvParameters>,
+    pvw_params: &Arc<PVWParameters>,
+    ct_pvw_sk: &[Ciphertext],
+    rotation_key: &GaloisKey,
+    rlk_keys: &HashMap<usize, RelinearizationKey>,
+    clues: &[PVWCiphertext],
+    sk: &SecretKey,
+    set_size: usize,
+    degree: usize,
+) -> Vec<Ciphertext> {
+    debug_assert!(set_size == clues.len());
+    debug_assert!(set_size % degree == 0);
+
+    println!("Phase 1 chunk count {}", set_size / degree);
+
+    let res: Vec<Ciphertext> = clues
+        .par_chunks(degree)
+        .map(|c| {
+            println!("Phase1...{}", c.len());
+
+            // level 0
+            let decrypted_clues = decrypt_pvw(
+                bfv_params,
+                pvw_params,
+                ct_pvw_sk.to_vec(),
+                rotation_key,
+                c,
+                sk,
+            );
+            assert!(decrypted_clues.len() == pvw_params.ell);
+
+            // level 1; decryption consumes 1
+            let mut ranged_decrypted_clues = decrypted_clues
+                .iter()
+                .map(|d| range_fn(bfv_params, d, rlk_keys, sk, 1, "params_850.bin"))
+                .collect_vec();
+
+            // level 9; range fn consumes 8
+            mul_many(&mut ranged_decrypted_clues, rlk_keys, 9);
+            assert!(ranged_decrypted_clues.len() == 1);
+
+            // level 10; mul_many consumes 1
+            ranged_decrypted_clues[0].clone()
+        })
+        .collect();
+
+    res
+}
+
+pub fn phase2() { 
+    
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::client::gen_pvw_sk_cts;
     use crate::utils::{
-        gen_rlk_keys, gen_rot_keys, powers_of_x_poly, range_fn_poly, rot_to_exponent,
+        gen_clues, gen_pertinent_indices, gen_rlk_keys, gen_rot_keys, powers_of_x_poly,
+        range_fn_poly, rot_to_exponent,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use itertools::izip;
+
+    #[test]
+    fn test_phase1() {
+        let mut rng = thread_rng();
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_moduli(MODULI_OMR)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .build()
+                .unwrap(),
+        );
+        let pvw_params = Arc::new(PVWParameters::default());
+
+        let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
+        let pvw_sk = Arc::new(PVWSecretKey::gen_sk(&pvw_params));
+        let pvw_pk = Arc::new(pvw_sk.public_key());
+
+        let set_size = 1usize << 14;
+
+        // gen clues
+        let mut pertinent_indices = gen_pertinent_indices(50, set_size);
+        pertinent_indices.sort();
+        println!("Pertinent indices: {:?}", pertinent_indices);
+
+        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, set_size);
+        assert!(clues.len() == set_size);
+        println!("Clues generated");
+
+        let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
+        let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
+
+        let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+
+        println!("Phase 1 starting...");
+        let now = std::time::Instant::now();
+        let res = phase1(
+            &bfv_params,
+            &pvw_params,
+            &ct_pvw_sk,
+            &top_rot_key,
+            &rlk_keys,
+            &clues,
+            &bfv_sk,
+            set_size,
+            DEGREE,
+        );
+        println!("Phase 1 took: {:?}", now.elapsed());
+
+        let vals = res.iter().flat_map(|ct| {
+            let pt = bfv_sk.try_decrypt(ct).unwrap();
+            Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
+        });
+
+        let mut final_pertinent_indices = vec![];
+        vals.enumerate().for_each(|(index, p)| {
+            if p == 1 {
+                final_pertinent_indices.push(index);
+            }
+        });
+
+        assert_eq!(pertinent_indices, final_pertinent_indices);
+    }
 
     #[test]
     fn test_decrypt_pvw() {
@@ -560,10 +682,7 @@ mod tests {
             clues.push(m);
         }
 
-        let clues_ct = clues
-            .iter()
-            .map(|c| pvw_pk.encrypt(c.to_vec()))
-            .collect_vec();
+        let clues_ct = clues.iter().map(|c| pvw_pk.encrypt(c)).collect_vec();
 
         let mut rng = thread_rng();
         let rot_key =
@@ -574,8 +693,8 @@ mod tests {
             &bfv_params,
             &pvw_params,
             pvw_sk_cts,
-            rot_key,
-            clues_ct,
+            &rot_key,
+            &clues_ct,
             &bfv_sk,
         );
         println!("decrypt_pvw took {:?}", now.elapsed());

@@ -19,7 +19,7 @@ impl Default for PVWParameters {
     fn default() -> Self {
         Self {
             n: 450,
-            m: 16000,
+            m: 100,
             ell: 4,
             variance: 2,
             q: 65537,
@@ -40,7 +40,7 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    pub fn encrypt(&self, m: Vec<u64>) -> PVWCiphertext {
+    pub fn encrypt(&self, m: &[u64]) -> PVWCiphertext {
         debug_assert!(m.len() == self.params.ell);
 
         let mut rng = thread_rng();
@@ -205,7 +205,7 @@ mod tests {
 
             let distr = Uniform::new(0u64, 2);
             let m = distr.sample_iter(rng).take(params.ell).collect_vec();
-            let ct = pk.encrypt(m.clone());
+            let ct = pk.encrypt(&m);
 
             let d_m = sk.decrypt(ct);
 
@@ -230,7 +230,7 @@ mod tests {
         let sk1 = PVWSecretKey::gen_sk(&params);
         let pk1 = sk1.public_key();
 
-        let ct = pk.encrypt(vec![0, 0, 0, 0]);
+        let ct = pk.encrypt(&[0, 0, 0, 0]);
 
         let mut count = 0;
         let mut count1 = 0;
@@ -240,8 +240,8 @@ mod tests {
                 .take(4)
                 .collect_vec();
 
-            let ct = pk.encrypt(vec![0, 0, 0, 0]);
-            let ct1 = pk1.encrypt(vec![0, 0, 0, 0]);
+            let ct = pk.encrypt(&[0, 0, 0, 0]);
+            let ct1 = pk1.encrypt(&[0, 0, 0, 0]);
 
             if sk.decrypt_without_scaling(ct) == vec![0, 0, 0, 0] {
                 count += 1;

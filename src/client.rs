@@ -76,15 +76,19 @@ pub fn construct_lhs(
     let mut overflow_counter = 0;
     for i in 0..N {
         if pv[i] == 1 {
-            for j in 0..gamma {
-                let cmb_i = assigned_buckets[i][j];
-                lhs[cmb_i][overflow_counter] = assigned_weights[i][j];
+            if overflow_counter < k {
+                for j in 0..gamma {
+                    let cmb_i = assigned_buckets[i][j];
+                    lhs[cmb_i][overflow_counter] = assigned_weights[i][j];
+                }
             }
             overflow_counter += 1;
         }
     }
 
-    assert!(overflow_counter <= k);
+    if overflow_counter > k {
+        println!("OVERFLOW!");
+    }
 
     lhs
 }

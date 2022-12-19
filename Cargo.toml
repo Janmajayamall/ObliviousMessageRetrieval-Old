@@ -13,3 +13,4 @@ fhe-math = { path = "/Users/janmajayamall/desktop/fhe.rs/crates/fhe-math"}
 rand = "0.8.5"
 itertools = "0.10.5"
 byteorder = "1.4.3"
+rayon = "1.6.0"
