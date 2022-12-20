@@ -693,7 +693,7 @@ mod tests {
     use itertools::izip;
 
     #[test]
-    fn test_phase1() {
+    fn test_phase1_and_phase2() {
         let mut rng = thread_rng();
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
@@ -806,36 +806,7 @@ mod tests {
             .map(|index| payloads[*index].clone())
             .collect_vec();
 
-        println!("{res:?}");
-        println!("{expected_pertinent_payloads:?}");
-
-        // let pt = bfv_sk.try_decrypt(&res).unwrap();
-        // let vals = Vec::<u64>::try_decode(&pt, Encoding::simd());
-
-        // let decompressed = pv_decompress(&bfv_params, &res, &bfv_sk);
-        // let mut pt_indices = vec![];
-        // decompressed.iter().enumerate().for_each(|(index, b)| {
-        //     if *b == 1 {
-        //         pt_indices.push(index)
-        //     }
-        // });
-
-        // println!("{:?}", pertinent_indices);
-        // println!("{:?}", pt_indices);
-
-        // let vals = res.iter().flat_map(|ct| {
-        //     let pt = bfv_sk.try_decrypt(ct).unwrap();
-        //     Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
-        // });
-
-        // let mut final_pertinent_indices = vec![];
-        // vals.enumerate().for_each(|(index, p)| {
-        //     if p == 1 {
-        //         final_pertinent_indices.push(index);
-        //     }
-        // });
-
-        // assert_eq!(pertinent_indices, final_pertinent_indices);
+        assert_eq!(res, expected_pertinent_payloads);
     }
 
     #[test]
