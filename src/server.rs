@@ -1,4 +1,3 @@
-use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
@@ -553,8 +552,6 @@ pub fn phase1(
     let res: Vec<Ciphertext> = clues
         .par_chunks(degree)
         .map(|c| {
-            println!("Phase1...{}", c.len());
-
             // level 0
             let decrypted_clues = decrypt_pvw(
                 bfv_params,
@@ -612,7 +609,7 @@ pub fn phase2(
         .par_iter_mut()
         .enumerate()
         .map(|(core_index, p_ct)| {
-            println!("Phase2...core_index: {core_index}");
+            // println!("Phase2...core:{core_index}");
 
             let mut pv = Ciphertext::zero(bfv_params);
             let compress_offset = core_index * degree;
@@ -671,11 +668,35 @@ pub fn phase2(
         pertinency_vectors[0] = &pertinency_vectors[0] + &pertinency_vectors[i];
     }
 
-    // TODO add RHS
     for i in 1..rhs.len() {
         for j in 0..ct_span_count {
             rhs[0][j] = &rhs[0][j] + &rhs[i][j];
         }
+    }
+
+    // unsafe {
+    //     println!(
+    //         "noise in pv before mod switch {}",
+    //         sk.measure_noise(&pertinency_vectors[0]).unwrap()
+    //     );
+    //     let mut p1 = pertinency_vectors[0].clone();
+    //     p1.mod_switch_to_next_level();
+
+    //     let mut p2 = pertinency_vectors[0].clone();
+    //     p2.mod_switch_to_last_level();
+    //     println!(
+    //         "noise in pv after mod switch by 1 {}",
+    //         sk.measure_noise(&p1).unwrap()
+    //     );
+    //     println!(
+    //         "noise in pv after mod switch to last level {}",
+    //         sk.measure_noise(&p2).unwrap()
+    //     );
+    // }
+
+    pertinency_vectors[0].mod_switch_to_next_level();
+    for r in &mut rhs[0] {
+        r.mod_switch_to_last_level();
     }
 
     (pertinency_vectors[0].clone(), rhs[0].clone())
@@ -709,7 +730,7 @@ mod tests {
         let pvw_sk = Arc::new(PVWSecretKey::gen_sk(&pvw_params));
         let pvw_pk = Arc::new(pvw_sk.public_key());
 
-        let set_size = 1usize << 14;
+        let set_size = 1 << 14;
         let k = 50;
         let m = k * 2;
         let gamma = 5;
@@ -735,6 +756,9 @@ mod tests {
         let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
         let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
 
+        let (assigned_buckets, assigned_weights) =
+            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size);
+
         println!("Phase 1 starting...");
         let now = std::time::Instant::now();
         let mut phase1_res = phase1(
@@ -748,13 +772,10 @@ mod tests {
             set_size,
             DEGREE,
         );
-        println!("Phase 1 took: {:?}", now.elapsed());
-
-        let (assigned_buckets, assigned_weights) =
-            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size);
+        let phase1_time = now.elapsed();
 
         println!("Phase 2 starting...");
-        let now = std::time::Instant::now();
+
         let (res_pv, res_rhs) = phase2(
             &assigned_buckets,
             &assigned_weights,
@@ -772,10 +793,30 @@ mod tests {
             payload_size,
             &bfv_sk,
         );
-        println!("Phase 2 took: {:?}", now.elapsed());
+        let end_time = now.elapsed();
+        println!(
+            "Phase1 took: {:?}; Phase2 took: {:?}",
+            phase1_time,
+            end_time - phase1_time
+        );
 
         /// CLIENT SIDE
         assert_eq!(res_rhs.len(), ct_span_count);
+
+        // {
+        //     // Checking ct encoding pv is correct (i.e. Phase 1)
+        //     let decompressed_pv = pv_decompress(&bfv_params, &res_pv, &bfv_sk);
+
+        //     let mut res_indices = vec![];
+        //     decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
+        //         if *bit == 1 {
+        //             res_indices.push(index);
+        //         }
+        //     });
+        //     println!("Expected indices {:?}", pertinent_indices);
+        //     println!("Res indices      {:?}", res_indices);
+        //     assert!(false);
+        // }
 
         let decompressed_pv = pv_decompress(&bfv_params, &res_pv, &bfv_sk);
         let lhs = construct_lhs(

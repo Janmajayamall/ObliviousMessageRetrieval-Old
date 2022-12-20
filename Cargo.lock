@@ -6,6 +6,7 @@ version = 3
 name = "OMR"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "byteorder",
  "fhe",
  "fhe-math",
@@ -21,6 +22,15 @@ name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
+
+[[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "block-buffer"
@@ -134,6 +144,7 @@ checksum = "90e5c1c8368803113bf0c9584fc495a58b86dc8a29edbf8fe877d21d9507e797"
 [[package]]
 name = "fhe"
 version = "0.1.0-beta.4"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
 dependencies = [
  "fhe-math",
  "fhe-traits",
@@ -153,6 +164,7 @@ dependencies = [
 [[package]]
 name = "fhe-math"
 version = "0.1.0-beta.4"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
 dependencies = [
  "crypto-bigint",
  "fhe-traits",
@@ -173,6 +185,7 @@ dependencies = [
 [[package]]
 name = "fhe-traits"
 version = "0.1.0-beta.4"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
 dependencies = [
  "rand",
 ]
@@ -180,6 +193,7 @@ dependencies = [
 [[package]]
 name = "fhe-util"
 version = "0.1.0-beta.4"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
 dependencies = [
  "itertools",
  "num-bigint-dig",

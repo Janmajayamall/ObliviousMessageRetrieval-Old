@@ -192,20 +192,6 @@ pub fn solve_equations(
     res
 }
 
-pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
-    let rng = thread_rng();
-    (0..size)
-        .into_iter()
-        .map(|_| {
-            // 256 bytes in 2 bytes pieces
-            rng.clone()
-                .sample_iter(Uniform::new(0u64, 65536))
-                .take(128)
-                .collect_vec()
-        })
-        .collect()
-}
-
 /// test fn that simulates powers_of_x on plaintext
 /// for debugging
 pub fn powers_of_x_poly(
@@ -403,18 +389,35 @@ pub fn gen_clues(
     pertinent_indices: &Vec<usize>,
     set_size: usize,
 ) -> Vec<PVWCiphertext> {
-    let tmp_sk = PVWSecretKey::gen_sk(pvw_params);
-    let other = tmp_sk.public_key().encrypt(&[0, 0, 0, 0]);
     (0..set_size)
         .map(|index| {
             if pertinent_indices.contains(&index) {
                 pvw_pk.encrypt(&[0, 0, 0, 0])
             } else {
-                other.clone()
+                let tmp_sk = PVWSecretKey::gen_sk(pvw_params);
+                tmp_sk.public_key().encrypt(&[0, 0, 0, 0])
             }
         })
         .collect()
 }
+
+pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
+    let rng = thread_rng();
+    (0..size)
+        .into_iter()
+        .map(|_| {
+            // 256 bytes in 2 bytes pieces
+            rng.clone()
+                .sample_iter(Uniform::new(0u64, 65536))
+                .take(128)
+                .collect_vec()
+        })
+        .collect()
+}
+
+// pub fn gen_data(size: ,gen: bool) -> {
+
+// }
 
 #[cfg(test)]
 mod tests {
