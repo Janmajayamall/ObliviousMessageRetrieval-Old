@@ -197,10 +197,10 @@ pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
     (0..size)
         .into_iter()
         .map(|_| {
-            // 256 bytes in 16 bytes pieces
+            // 256 bytes in 2 bytes pieces
             rng.clone()
                 .sample_iter(Uniform::new(0u64, 65536))
-                .take(16)
+                .take(128)
                 .collect_vec()
         })
         .collect()
@@ -420,7 +420,7 @@ pub fn gen_clues(
 mod tests {
     use super::*;
     use itertools::Itertools;
-    use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+    use rand::{distributions::Uniform, thread_rng};
 
     #[test]
     fn trial() {

@@ -11,7 +11,7 @@ use fhe_math::{
 };
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use rand::{Rng, RngCore};
 use rayon::prelude::*;
@@ -462,7 +462,7 @@ pub fn pv_weights(
     assigned_buckets: &Vec<Vec<usize>>,
     assigned_weights: &Vec<Vec<u64>>,
     pv: &Vec<Ciphertext>,
-    payloads: &Vec<Vec<u64>>,
+    payloads: &[Vec<u64>],
     payload_size: usize,
     bfv_params: &Arc<BfvParameters>,
     batch_size: usize,
@@ -476,25 +476,22 @@ pub fn pv_weights(
     let modulus = Modulus::new(q_mod).unwrap();
 
     let mut products = vec![vec![Ciphertext::zero(&bfv_params); ct_span_count]; batch_size];
-    for row_index in 0..batch_size {
+    for batch_index in 0..batch_size {
         let mut pt = vec![vec![0u64; bfv_params.degree()]; ct_span_count];
         for i in 0..gamma {
             // think of single bucket as spanning across `payload_size`
             // no. of rows of plaintext vector
-            let start_row = assigned_buckets[row_index + offset][i] * payload_size;
-
+            let start_row = assigned_buckets[batch_index + offset][i] * payload_size;
+            let weight = assigned_weights[batch_index + offset][i];
             for payload_index in 0..payload_size {
-                let row = start_row + i;
+                let row = start_row + payload_index;
                 let span_col = row / degree;
                 let span_row = row % degree;
 
                 // payload chunk * weight
                 pt[span_col][span_row] = modulus.add(
                     pt[span_col][span_row],
-                    modulus.mul(
-                        payloads[row_index + offset][payload_index],
-                        assigned_weights[row_index + offset][i],
-                    ),
+                    modulus.mul(payloads[batch_index + offset][payload_index], weight),
                 )
             }
         }
@@ -504,20 +501,34 @@ pub fn pv_weights(
             .map(|col| {
                 let p = Plaintext::try_encode(col, Encoding::simd_at_level(level), &bfv_params)
                     .unwrap();
-                &pv[row_index] * &p
+                &pv[batch_index] * &p
             })
             .collect_vec();
 
-        products[row_index] = product;
+        products[batch_index] = product;
     }
 
     products
 }
 
-pub fn finalise_combinations(pv_weights: &Vec<Ciphertext>, rhs: &mut Ciphertext) {
-    for i in 0..pv_weights.len() {
-        *rhs += &pv_weights[i];
-    }
+pub fn finalise_combinations(
+    pv_weights: &[Vec<Ciphertext>],
+    rhs: &mut [Ciphertext],
+    m: usize,
+    degree: usize,
+    payload_size: usize,
+) {
+    // payload_size = row span of a single bucket
+    // therefore, m * payload_size = total rows required
+    //
+    assert!(m * payload_size <= rhs.len() * degree);
+
+    pv_weights.iter().for_each(|pv_by_w| {
+        assert!(pv_by_w.len() == rhs.len());
+        izip!(pv_by_w.iter(), rhs.iter_mut()).for_each(|(pv, rh)| {
+            *rh += pv;
+        });
+    });
 }
 
 /// Does the following:
@@ -578,28 +589,39 @@ pub fn phase1(
 /// 2. compresses unpacked ct into PV ct
 /// 3. assigns weights to buckets
 pub fn phase2(
+    assigned_buckets: &Vec<Vec<usize>>,
+    assigned_weights: &Vec<Vec<u64>>,
     bfv_params: &Arc<BfvParameters>,
     rot_keys: &HashMap<usize, GaloisKey>,
     inner_sum_rot_keys: &HashMap<usize, GaloisKey>,
     pertinency_cts: &mut [Ciphertext],
+    payloads: &[Vec<u64>],
     batch_size: usize,
     degree: usize,
     level: usize,
+    set_size: usize,
+    gamma: usize,
+    ct_span_count: usize,
+    payload_size: usize,
     sk: &SecretKey,
-) -> Ciphertext {
+) -> (Ciphertext, Vec<Ciphertext>) {
     debug_assert!(degree % batch_size == 0);
-    let f = pertinency_cts.len();
-    let mut pertinency_vectors: Vec<Ciphertext> = pertinency_cts
+    debug_assert!(set_size == degree * pertinency_cts.len()); // TODO: relax this from == to <=
+
+    let (mut pertinency_vectors, mut rhs): (Vec<Ciphertext>, Vec<Vec<Ciphertext>>) = pertinency_cts
         .par_iter_mut()
-        .zip(0..f)
-        .map(|(p_ct, core_index)| {
-            println!("Phase2...core_index: {}", core_index);
+        .enumerate()
+        .map(|(core_index, p_ct)| {
+            println!("Phase2...core_index: {core_index}");
 
             let mut pv = Ciphertext::zero(bfv_params);
             let compress_offset = core_index * degree;
             let mut offset = 0usize;
 
+            let mut rhs = vec![Ciphertext::zero(bfv_params); ct_span_count];
+
             for _ in 0..degree / batch_size {
+                // level 10
                 let unpacked_cts = pv_unpack(
                     bfv_params,
                     rot_keys,
@@ -611,6 +633,7 @@ pub fn phase2(
                     level,
                 );
 
+                // level 12; unpacking consumes 2 levels
                 pv_compress(
                     bfv_params,
                     &unpacked_cts,
@@ -620,10 +643,27 @@ pub fn phase2(
                     &mut pv,
                 );
 
+                let pv_we = pv_weights(
+                    assigned_buckets,
+                    assigned_weights,
+                    &unpacked_cts,
+                    payloads,
+                    payload_size,
+                    bfv_params,
+                    batch_size,
+                    ct_span_count,
+                    gamma,
+                    offset + compress_offset,
+                    level + 2,
+                    degree,
+                );
+
+                finalise_combinations(&pv_we, &mut rhs, 100, degree, payload_size);
+
                 offset += batch_size;
             }
 
-            pv
+            (pv, rhs)
         })
         .collect();
 
@@ -631,16 +671,23 @@ pub fn phase2(
         pertinency_vectors[0] = &pertinency_vectors[0] + &pertinency_vectors[i];
     }
 
-    pertinency_vectors[0].clone()
+    // TODO add RHS
+    for i in 1..rhs.len() {
+        for j in 0..ct_span_count {
+            rhs[0][j] = &rhs[0][j] + &rhs[i][j];
+        }
+    }
+
+    (pertinency_vectors[0].clone(), rhs[0].clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{gen_pvw_sk_cts, pv_decompress};
+    use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
     use crate::utils::{
-        gen_clues, gen_pertinent_indices, gen_rlk_keys, gen_rot_keys, powers_of_x_poly,
-        range_fn_poly, rot_to_exponent,
+        assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys, gen_rot_keys,
+        powers_of_x_poly, range_fn_poly, rot_to_exponent, solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use itertools::izip;
@@ -663,6 +710,12 @@ mod tests {
         let pvw_pk = Arc::new(pvw_sk.public_key());
 
         let set_size = 1usize << 14;
+        let k = 50;
+        let m = k * 2;
+        let gamma = 5;
+        let data_size_in_bytes = 256;
+        let payload_size = data_size_in_bytes / 2; // t = 65537 ~ 2 ** 16 ~ 16 bits
+        let ct_span_count = (((m * payload_size) as f64) / (DEGREE as f64)).ceil() as usize;
 
         // gen clues
         let mut pertinent_indices = gen_pertinent_indices(50, set_size);
@@ -670,7 +723,9 @@ mod tests {
         println!("Pertinent indices: {:?}", pertinent_indices);
 
         let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, set_size);
+        let payloads = gen_paylods(set_size);
         assert!(clues.len() == set_size);
+        assert!(payloads.len() == clues.len());
         println!("Clues generated");
 
         let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
@@ -695,33 +750,78 @@ mod tests {
         );
         println!("Phase 1 took: {:?}", now.elapsed());
 
+        let (assigned_buckets, assigned_weights) =
+            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size);
+
         println!("Phase 2 starting...");
         let now = std::time::Instant::now();
-        let res = phase2(
+        let (res_pv, res_rhs) = phase2(
+            &assigned_buckets,
+            &assigned_weights,
             &bfv_params,
             &rot_keys,
             &inner_sum_rot_keys,
             &mut phase1_res,
+            &payloads,
             32,
             DEGREE,
             10,
+            set_size,
+            gamma,
+            ct_span_count,
+            payload_size,
             &bfv_sk,
         );
         println!("Phase 2 took: {:?}", now.elapsed());
 
+        /// CLIENT SIDE
+        assert_eq!(res_rhs.len(), ct_span_count);
+
+        let decompressed_pv = pv_decompress(&bfv_params, &res_pv, &bfv_sk);
+        let lhs = construct_lhs(
+            &decompressed_pv,
+            assigned_buckets,
+            assigned_weights,
+            m,
+            k,
+            gamma,
+            set_size,
+        );
+
+        // build m * payload_size rows
+        let m_rows = res_rhs
+            .iter()
+            .flat_map(|rh| {
+                let pt = bfv_sk.try_decrypt(rh).unwrap();
+                Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
+            })
+            .collect();
+
+        let rhs = construct_rhs(m_rows, m, payload_size, MODULI_OMR_PT[0]);
+
+        let res = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
+
+        let expected_pertinent_payloads = pertinent_indices
+            .iter()
+            .map(|index| payloads[*index].clone())
+            .collect_vec();
+
+        println!("{res:?}");
+        println!("{expected_pertinent_payloads:?}");
+
         // let pt = bfv_sk.try_decrypt(&res).unwrap();
         // let vals = Vec::<u64>::try_decode(&pt, Encoding::simd());
 
-        let decompressed = pv_decompress(&bfv_params, &res, &bfv_sk);
-        let mut pt_indices = vec![];
-        decompressed.iter().enumerate().for_each(|(index, b)| {
-            if *b == 1 {
-                pt_indices.push(index)
-            }
-        });
+        // let decompressed = pv_decompress(&bfv_params, &res, &bfv_sk);
+        // let mut pt_indices = vec![];
+        // decompressed.iter().enumerate().for_each(|(index, b)| {
+        //     if *b == 1 {
+        //         pt_indices.push(index)
+        //     }
+        // });
 
-        println!("{:?}", pertinent_indices);
-        println!("{:?}", pt_indices);
+        // println!("{:?}", pertinent_indices);
+        // println!("{:?}", pt_indices);
 
         // let vals = res.iter().flat_map(|ct| {
         //     let pt = bfv_sk.try_decrypt(ct).unwrap();

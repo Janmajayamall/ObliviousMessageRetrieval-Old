@@ -206,7 +206,9 @@ fn run() {
 
     let mut ct = range_res_cts[0].clone();
     let mut compressed_pv_ct = Ciphertext::zero(&bfv_params);
-    let mut rhs_ct = Ciphertext::zero(&bfv_params);
+
+    let msg_digest_ct_span = ((m * payload_size) as f64 / (DEGREE as f64)).ceil() as usize;
+    let mut rhs_ct = vec![Ciphertext::zero(&bfv_params); msg_digest_ct_span];
 
     // process rest of the operations in batches
     println!("Unpacking and compressing pv");
@@ -252,12 +254,20 @@ fn run() {
             payload_size,
             &bfv_params,
             batch_size,
+            msg_digest_ct_span,
             gamma,
             offset,
             level_offset + 2,
+            DEGREE,
         );
 
-        finalise_combinations(&pv_by_weights, &mut rhs_ct);
+        finalise_combinations(
+            pv_by_weights.as_slice(),
+            &mut rhs_ct,
+            m,
+            DEGREE,
+            payload_size,
+        );
         println!("batch {} combinations took {:?}", i, now.elapsed().unwrap());
 
         offset += batch_size;
@@ -266,11 +276,13 @@ fn run() {
     level_offset += 2;
 
     unsafe {
-        dbg!(bfv_sk.measure_noise(&rhs_ct)).unwrap();
+        dbg!(bfv_sk.measure_noise(&rhs_ct[0])).unwrap();
     }
 
     compressed_pv_ct.mod_switch_to_last_level();
-    rhs_ct.mod_switch_to_last_level();
+    for ct in &mut rhs_ct {
+        ct.mod_switch_to_last_level();
+    }
 
     println!("///////// CLIENT SIDE //////////");
     let client_time = std::time::SystemTime::now();
@@ -286,42 +298,42 @@ fn run() {
     // println!("Expected indices {:?}", pertinent_indices);
     // println!("Res indices      {:?}", res_indices);
 
-    let rhs_vals = bfv_sk.try_decrypt(&rhs_ct).unwrap();
-    let rhs_vals = Vec::<u64>::try_decode(&rhs_vals, Encoding::simd()).unwrap();
+    // let rhs_vals = bfv_sk.try_decrypt(&rhs_ct).unwrap();
+    // let rhs_vals = Vec::<u64>::try_decode(&rhs_vals, Encoding::simd()).unwrap();
 
-    // solve linear equations
-    let lhs = construct_lhs(
-        &pv,
-        assigned_buckets,
-        assigned_bucket_weights,
-        m,
-        k,
-        gamma,
-        N,
-    );
-    let rhs = construct_rhs(rhs_vals, m, payload_size, bfv_params.plaintext());
-    let vals = solve_equations(lhs, rhs, bfv_params.plaintext());
+    // // solve linear equations
+    // let lhs = construct_lhs(
+    //     &pv,
+    //     assigned_buckets,
+    //     assigned_bucket_weights,
+    //     m,
+    //     k,
+    //     gamma,
+    //     N,
+    // );
+    // let rhs = construct_rhs(rhs_vals, m, payload_size, bfv_params.plaintext());
+    // let vals = solve_equations(lhs, rhs, bfv_params.plaintext());
 
-    let client_time = client_time.elapsed().unwrap();
+    // let client_time = client_time.elapsed().unwrap();
 
-    let mut expected_dataset = HashSet::new();
-    pertinent_indices.iter().for_each(|i| {
-        expected_dataset.insert(rows.1[*i].clone());
-    });
+    // let mut expected_dataset = HashSet::new();
+    // pertinent_indices.iter().for_each(|i| {
+    //     expected_dataset.insert(rows.1[*i].clone());
+    // });
 
-    let mut res_dataset = HashSet::new();
-    vals.iter().for_each(|val| {
-        if *val != vec![0; payload_size] {
-            res_dataset.insert(val.clone());
-        }
-    });
+    // let mut res_dataset = HashSet::new();
+    // vals.iter().for_each(|val| {
+    //     if *val != vec![0; payload_size] {
+    //         res_dataset.insert(val.clone());
+    //     }
+    // });
 
-    assert_eq!(expected_dataset, res_dataset);
-    println!("OMR works!");
-    println!(
-        "Server took: {:?}; Client took: {:?}",
-        server_time, client_time
-    );
+    // assert_eq!(expected_dataset, res_dataset);
+    // println!("OMR works!");
+    // println!(
+    //     "Server took: {:?}; Client took: {:?}",
+    //     server_time, client_time
+    // );
 }
 
 fn main() {
