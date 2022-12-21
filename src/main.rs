@@ -17,17 +17,21 @@ use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use rand::{Rng, RngCore};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::fmt::format;
 use std::fs::DirBuilder;
+use std::io::Write;
+
 use std::sync::Arc;
 use std::vec;
+use utils::{gen_clues, gen_paylods};
 
 mod client;
 mod pvw;
 mod server;
 mod utils;
 
-use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey};
-use server::{decrypt_pvw, powers_of_x, pv_compress, pv_weights, range_fn};
+use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
+use server::{decrypt_pvw, phase1, phase2, powers_of_x, pv_compress, pv_weights, range_fn};
 
 use crate::client::{construct_lhs, construct_rhs, pv_decompress};
 use crate::server::{finalise_combinations, mul_many, pv_unpack};
@@ -52,7 +56,182 @@ const MODULI_OMR: &[u64; 15] = &[
 ];
 const DEGREE: usize = 1 << 11;
 const MODULI_OMR_PT: &[u64; 1] = &[65537];
+const SET_SIZE: usize = 1 << 14;
 
+pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey) {
+    assert!(set_size > 50);
+    let mut rng = thread_rng();
+
+    let tmp = Uniform::new(0, set_size);
+    let mut pertinent_indices = vec![];
+    // 50 messages are pertinent
+    while pertinent_indices.len() != 50 {
+        let v = tmp.sample(&mut rng);
+        if !pertinent_indices.contains(&v) {
+            pertinent_indices.push(v);
+        }
+    }
+
+    // create dir
+    std::fs::create_dir_all("target/omr").unwrap();
+
+    // store pertinent indices for later
+    {
+        std::fs::File::create("target/omr/pertinent-indices.bin")
+            .unwrap()
+            .write_all(&bincode::serialize(&pertinent_indices).unwrap())
+            .unwrap();
+    }
+
+    let payload_distr = Uniform::new(0u8, u8::MAX);
+
+    (0..set_size).for_each(|index| {
+        let clue = if pertinent_indices.contains(&index) {
+            pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
+        } else {
+            let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+            tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+        };
+        let payload = payload_distr
+            .sample_iter(rng.clone())
+            .take(256)
+            .collect_vec();
+
+        let clue_buff = bincode::serialize(&clue).unwrap();
+        std::fs::File::create(format!("target/omr/clue-{index}.bin"))
+            .unwrap()
+            .write_all(&clue_buff)
+            .unwrap();
+        std::fs::File::create(format!("target/omr/payload-{index}.bin"))
+            .unwrap()
+            .write_all(&payload)
+            .unwrap();
+    });
+}
+
+fn run1(set_size: usize, gen_sample: bool) {
+    let mut rng = thread_rng();
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .set_moduli(MODULI_OMR)
+            .build()
+            .unwrap(),
+    );
+    let pvw_params = PVWParameters {
+        n: 450,
+        m: 100,
+        ell: 4,
+        variance: 1.3,
+        q: 65537,
+    };
+
+    // CLIENT SETUP //
+    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+    let pvw_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
+
+    // pvw secret key encrypted under bfv
+    let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
+
+    let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
+    let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+    let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
+    let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
+
+    // Generate sample data //
+    if gen_sample {
+        gen_data(set_size, &pvw_params, &pvw_pk);
+    }
+
+    let mut pertinent_indices: Vec<usize> = bincode::deserialize(
+        &std::fs::read("target/omr/pertinent-indices.bin").expect("Indices file missing!"),
+    )
+    .unwrap();
+
+    let data: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..set_size)
+        .map(|index| {
+            let clue: PVWCiphertext = bincode::deserialize(
+                &std::fs::read(format!("target/omr/clue-{index}.bin")).expect("Clue file missing!"),
+            )
+            .expect("Invalid clue file!");
+            // change payload from bytes to collection of two bytes
+            let payload: Vec<u64> = std::fs::read(format!("target/omr/payload-{index}.bin"))
+                .expect("Clue file missing!")
+                .chunks(2)
+                .map(|v| (v[0] as u64) + (v[1] as u64) << 8)
+                .collect();
+            assert!(payload.len() == 128);
+
+            (clue, payload)
+        })
+        .unzip();
+    let clues = data.0;
+    let payloads = data.1;
+    let mut pertinent_payloads = vec![];
+    (0..set_size)
+        .zip(payloads.iter())
+        .for_each(|(index, load)| {
+            if pertinent_indices.contains(&index) {
+                pertinent_payloads.push(load.clone());
+            }
+        });
+
+    // SERVER SIDE //
+    let (assigned_buckets, assigned_weights) = assign_buckets(100, 5, MODULI_OMR_PT[0], set_size);
+    let mut pertinency_cts = phase1(
+        &bfv_params,
+        &pvw_params,
+        &ct_pvw_sk,
+        &top_rot_key,
+        &rlk_keys,
+        &clues,
+        &bfv_sk,
+        set_size,
+        DEGREE,
+    );
+
+    let (compressed_pv, msg_cts) = phase2(
+        &assigned_buckets,
+        &assigned_weights,
+        &bfv_params,
+        &rot_keys,
+        &inner_sum_rot_keys,
+        &mut pertinency_cts,
+        &payloads,
+        32,
+        DEGREE,
+        10,
+        set_size,
+        5,
+        7,
+        128,
+        &bfv_sk,
+    );
+
+    // CLIENT SIDE //
+    let pv = pv_decompress(&bfv_params, &compressed_pv, &bfv_sk);
+    let lhs = construct_lhs(
+        &pv,
+        assigned_buckets,
+        assigned_weights,
+        100,
+        50,
+        5,
+        set_size,
+    );
+    let m_rows = msg_cts
+        .iter()
+        .flat_map(|m| {
+            Vec::<u64>::try_decode(&bfv_sk.try_decrypt(m).unwrap(), Encoding::simd()).unwrap()
+        })
+        .collect_vec();
+    let rhs = construct_rhs(&m_rows, 100, 128, MODULI_OMR_PT[0]);
+    let res_payloads = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
+
+    assert_eq!(pertinent_payloads, res_payloads);
+}
 fn run() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
@@ -343,7 +522,7 @@ fn run() {
 }
 
 fn main() {
-    run();
+    run1(51, true);
 }
 
 #[cfg(test)]

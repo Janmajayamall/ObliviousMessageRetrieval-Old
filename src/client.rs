@@ -21,7 +21,7 @@ use std::{fs::File, io::Write, path::Path, vec};
 
 pub fn gen_pvw_sk_cts(
     bfv_params: &Arc<BfvParameters>,
-    pvw_params: &Arc<PVWParameters>,
+    pvw_params: &PVWParameters,
     bfv_sk: &SecretKey,
     pvw_sk: &PVWSecretKey,
 ) -> Vec<Ciphertext> {
@@ -94,7 +94,7 @@ pub fn construct_lhs(
     lhs
 }
 
-pub fn construct_rhs(values: Vec<u64>, m: usize, payload_size: usize, q_mod: u64) -> Vec<Vec<u64>> {
+pub fn construct_rhs(values: &[u64], m: usize, payload_size: usize, q_mod: u64) -> Vec<Vec<u64>> {
     values[..m * payload_size]
         .chunks(payload_size)
         .map(|bucket| bucket.to_vec())

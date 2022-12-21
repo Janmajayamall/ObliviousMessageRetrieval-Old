@@ -58,7 +58,7 @@ pub fn precompute_range_coeffs() {
     let mut buf = [0u8; 65536 * 8];
     LittleEndian::write_u64_into(&coeffs, &mut buf);
     let mut f = File::create("params_850.bin").unwrap();
-    f.write_all(&buf);
+    f.write_all(&buf).unwrap();
 }
 
 pub fn rot_to_exponent(rot_by: u64, bfv_params: &Arc<BfvParameters>) -> usize {
@@ -384,8 +384,8 @@ pub fn gen_pertinent_indices(size: usize, set_size: usize) -> Vec<usize> {
 }
 
 pub fn gen_clues(
-    pvw_params: &Arc<PVWParameters>,
-    pvw_pk: &Arc<PublicKey>,
+    pvw_params: &PVWParameters,
+    pvw_pk: &PublicKey,
     pertinent_indices: &Vec<usize>,
     set_size: usize,
 ) -> Vec<PVWCiphertext> {
@@ -407,18 +407,14 @@ pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
     (0..size)
         .into_iter()
         .map(|_| {
-            // 256 bytes in 2 bytes pieces
+            // 256 bytes of random data in size of 2 bytes
             rng.clone()
-                .sample_iter(Uniform::new(0u64, 65536))
+                .sample_iter(Uniform::new(0u64, 1 << 16))
                 .take(128)
                 .collect_vec()
         })
         .collect()
 }
-
-// pub fn gen_data(size: ,gen: bool) -> {
-
-// }
 
 #[cfg(test)]
 mod tests {

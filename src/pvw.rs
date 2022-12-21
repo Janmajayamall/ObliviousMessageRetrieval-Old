@@ -5,6 +5,7 @@ use rand::{
     distributions::{Distribution, Uniform},
     CryptoRng, RngCore,
 };
+use serde::{Deserialize, Serialize};
 use statrs::distribution::Normal;
 
 #[derive(Clone, Debug)]
@@ -28,10 +29,10 @@ impl Default for PVWParameters {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct PVWCiphertext {
-    pub a: Array1<u64>,
-    pub b: Array1<u64>,
+    pub a: Vec<u64>,
+    pub b: Vec<u64>,
 }
 
 pub struct PublicKey {
@@ -78,7 +79,10 @@ impl PublicKey {
                 .collect(),
         );
 
-        PVWCiphertext { a: ae, b: be }
+        PVWCiphertext {
+            a: ae.to_vec(),
+            b: be.to_vec(),
+        }
     }
 }
 
@@ -155,7 +159,7 @@ impl PVWSecretKey {
 
         izip!(ct.b.iter(), self.key.outer_iter())
             .map(|(b_ell, k_ell_n)| {
-                let mut r = ct.a.to_vec();
+                let mut r = ct.a.clone();
                 q.mul_vec(&mut r, &k_ell_n.to_vec());
                 let d = q.sub(*b_ell, q.reduce(r.iter().sum::<u64>()));
                 (d >= self.params.q / 2) as u64
@@ -168,7 +172,7 @@ impl PVWSecretKey {
 
         izip!(ct.b.iter(), self.key.outer_iter())
             .map(|(b_ell, k_ell_n)| {
-                let mut r = ct.a.to_vec();
+                let mut r = ct.a.clone();
                 q.mul_vec(&mut r, &k_ell_n.to_vec());
 
                 // shift value left by q/4 so that
