@@ -5,6 +5,7 @@ use rand::{
     distributions::{Distribution, Uniform},
     thread_rng,
 };
+use statrs::distribution::Normal;
 
 #[derive(Clone, Debug)]
 pub struct PVWParameters {
@@ -19,7 +20,7 @@ impl Default for PVWParameters {
     fn default() -> Self {
         Self {
             n: 450,
-            m: 100,
+            m: 1600,
             ell: 4,
             variance: 2,
             q: 65537,
@@ -119,10 +120,15 @@ impl PVWSecretKey {
             // let e = q.reduce_vec_i64(
             //     &sample_vec_cbd(self.params.ell, self.params.variance, &mut rng).unwrap(),
             // );
-            let e = Uniform::new(0, 2u64)
+
+            let e = Normal::new(0.0, 1.3)
+                .unwrap()
                 .sample_iter(rng.clone())
                 .take(self.params.ell)
+                .map(|v| v.round() as i64)
                 .collect_vec();
+            let e = q.reduce_vec_i64(&e);
+
             for l_i in 0..self.params.ell {
                 let mut sum = 0u64;
                 for n_i in 0..self.params.n {
@@ -173,8 +179,16 @@ impl PVWSecretKey {
             d[ell_i] = q.sub(ct.b[ell_i], sum);
         }
 
+        // shift left by q / 4
         d.iter_mut().for_each(|v| {
-            if *v > (self.params.q / 4) - 850 && *v < (self.params.q / 4) + 850 {
+            *v = q.sub(*v, self.params.q / 4);
+        });
+
+        // After shift left by q / 4, encryption of 0s
+        // should be in the range `p - 850 < v < +850`
+        // with high probability
+        d.iter_mut().for_each(|v| {
+            if *v >= q.modulus() - 850 || *v <= 850 {
                 *v = 0
             } else {
                 *v = 1
@@ -191,13 +205,7 @@ mod tests {
 
     #[test]
     fn encrypt() {
-        let params = PVWParameters {
-            n: 450,
-            m: 100,
-            ell: 4,
-            variance: 2,
-            q: 65537,
-        };
+        let params = PVWParameters::default();
         for _ in 0..10 {
             let mut rng = thread_rng();
             let sk = PVWSecretKey::gen_sk(&params);
@@ -207,21 +215,15 @@ mod tests {
             let m = distr.sample_iter(rng).take(params.ell).collect_vec();
             let ct = pk.encrypt(&m);
 
-            let d_m = sk.decrypt(ct);
+            let d_m = sk.decrypt_without_scaling(ct);
 
             assert_eq!(m, d_m)
         }
     }
 
     #[test]
-    fn study_probs() {
-        let params = PVWParameters {
-            n: 450,
-            m: 100,
-            ell: 4,
-            variance: 2,
-            q: 65537,
-        };
+    fn check_probs() {
+        let params = PVWParameters::default();
 
         let mut rng = thread_rng();
         let sk = PVWSecretKey::gen_sk(&params);
@@ -234,11 +236,12 @@ mod tests {
 
         let mut count = 0;
         let mut count1 = 0;
-        for i in 0..100 {
-            let vals = Uniform::new(0u64, 2)
-                .sample_iter(rng.clone())
-                .take(4)
-                .collect_vec();
+        let observations = 1000;
+        for _ in 0..observations {
+            // let vals = Uniform::new(0u64, 2)
+            //     .sample_iter(rng.clone())
+            //     .take(4)
+            //     .collect_vec();
 
             let ct = pk.encrypt(&[0, 0, 0, 0]);
             let ct1 = pk1.encrypt(&[0, 0, 0, 0]);
@@ -251,7 +254,18 @@ mod tests {
                 count1 += 1;
             }
         }
-        dbg!(count);
-        dbg!(count1);
+        assert!((count as f64 / observations as f64) == 1.0);
+        assert!((count1 as f64 / observations as f64) == 0.0);
+    }
+
+    #[test]
+    fn trial() {
+        let rng = thread_rng();
+        let e = Normal::new(0.0, 1.3)
+            .unwrap()
+            .sample_iter(rng.clone())
+            .take(4)
+            .collect_vec();
+        dbg!(e);
     }
 }
