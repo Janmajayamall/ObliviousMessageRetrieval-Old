@@ -1,6 +1,6 @@
 use fhe_math::zq::Modulus;
-use fhe_util::sample_vec_cbd;
-use itertools::Itertools;
+use itertools::{izip, Itertools};
+use ndarray::{Array, Array1, Array2, Axis};
 use rand::{
     distributions::{Distribution, Uniform},
     thread_rng,
@@ -12,7 +12,7 @@ pub struct PVWParameters {
     pub n: usize,
     pub m: usize,
     pub ell: usize,
-    pub variance: usize,
+    pub variance: f64,
     pub q: u64,
 }
 
@@ -20,9 +20,9 @@ impl Default for PVWParameters {
     fn default() -> Self {
         Self {
             n: 450,
-            m: 1600,
+            m: 16000,
             ell: 4,
-            variance: 2,
+            variance: 1.3,
             q: 65537,
         }
     }
@@ -30,13 +30,13 @@ impl Default for PVWParameters {
 
 #[derive(Clone)]
 pub struct PVWCiphertext {
-    pub a: Vec<u64>,
-    pub b: Vec<u64>,
+    pub a: Array1<u64>,
+    pub b: Array1<u64>,
 }
 
 pub struct PublicKey {
-    a: Vec<Vec<u64>>,
-    b: Vec<Vec<u64>>,
+    a: Array2<u64>,
+    b: Array2<u64>,
     params: PVWParameters,
 }
 
@@ -45,63 +45,62 @@ impl PublicKey {
         debug_assert!(m.len() == self.params.ell);
 
         let mut rng = thread_rng();
-        let q = Modulus::new(self.params.q).unwrap();
-        let t = m
-            .iter()
-            .map(|v| {
-                if *v == 1 {
-                    (3 * self.params.q / 4)
-                } else {
-                    (self.params.q / 4)
-                }
-            })
-            .collect_vec();
-
-        let distr = Uniform::new(0u64, 2);
-        let e = distr
-            .sample_iter(&mut rng)
+        let error = Uniform::new(0u64, 2)
+            .sample_iter(rng)
             .take(self.params.m)
             .collect_vec();
 
-        let mut a = vec![0u64; self.params.n];
-        for n_i in 0..self.params.n {
-            let mut sum = 0u64;
-            for m_i in 0..self.params.m {
-                sum = q.add(sum, q.mul(self.a[m_i][n_i], e[m_i]));
-            }
-            a[n_i] = q.add(a[n_i], sum);
-        }
-        let mut b = vec![0u64; self.params.ell];
-        for ell_i in 0..self.params.ell {
-            let mut sum = 0u64;
-            for m_i in 0..self.params.m {
-                sum = q.add(sum, q.mul(self.b[m_i][ell_i], e[m_i]));
-            }
-            sum = q.add(sum, t[ell_i]);
-            b[ell_i] = q.add(b[ell_i], sum);
-        }
+        let q = Modulus::new(self.params.q).unwrap();
+        let ae = Array1::from_vec(
+            self.a
+                .outer_iter()
+                .map(|a_n_m| {
+                    let mut r = a_n_m.to_vec();
+                    q.mul_vec(&mut r, &error);
+                    q.reduce(r.iter().sum::<u64>())
+                })
+                .collect(),
+        );
 
-        PVWCiphertext { a, b }
+        let t = m.iter().map(|v| {
+            if *v == 1 {
+                q.reduce((3 * self.params.q) / 4)
+            } else {
+                q.reduce(self.params.q / 4)
+            }
+        });
+        let be = Array1::from_vec(
+            izip!(self.b.outer_iter(), t)
+                .map(|(b_ell_m, ti)| {
+                    let mut r = b_ell_m.to_vec();
+                    q.mul_vec(&mut r, &error);
+                    q.add(q.reduce(r.iter().sum::<u64>()), ti)
+                })
+                .collect(),
+        );
+
+        PVWCiphertext { a: ae, b: be }
     }
 }
 
 pub struct PVWSecretKey {
-    pub key: Vec<Vec<u64>>,
+    pub key: Array2<u64>,
     pub params: PVWParameters,
 }
 
 impl PVWSecretKey {
-    pub fn gen_sk(params: &PVWParameters) -> PVWSecretKey {
+    pub fn random(params: &PVWParameters) -> PVWSecretKey {
         let mut rng = rand::thread_rng();
         let q = Modulus::new(params.q).unwrap();
 
-        let mut cols = vec![];
-        for i in 0..params.ell {
-            cols.push(q.random_vec(params.n, &mut rng));
-        }
+        let sk = Array::from_shape_vec(
+            (params.ell, params.n),
+            q.random_vec(params.n * params.ell, &mut rng),
+        )
+        .unwrap();
 
         PVWSecretKey {
-            key: cols,
+            key: sk,
             params: params.clone(),
         }
     }
@@ -110,38 +109,46 @@ impl PVWSecretKey {
         let q = Modulus::new(self.params.q).unwrap();
         let mut rng = thread_rng();
 
-        let mut a = vec![];
-        for i in 0..self.params.m {
-            a.push(q.random_vec(self.params.n, &mut rng))
-        }
+        let a = Array::from_shape_vec(
+            (self.params.n, self.params.m),
+            q.random_vec(self.params.n * self.params.m, &mut rng),
+        )
+        .unwrap();
 
-        let mut b = vec![vec![0u64; self.params.ell]; self.params.m];
-        for m_i in 0..self.params.m {
-            // let e = q.reduce_vec_i64(
-            //     &sample_vec_cbd(self.params.ell, self.params.variance, &mut rng).unwrap(),
-            // );
+        // sk * a;
+        let distr = Normal::new(0.0, self.params.variance).unwrap();
+        let error = Array::from_shape_vec(
+            (self.params.ell, self.params.m),
+            q.reduce_vec_i64(
+                &distr
+                    .sample_iter(rng.clone())
+                    .take(self.params.ell * self.params.m)
+                    .map(|v| v.round() as i64)
+                    .collect_vec(),
+            ),
+        )
+        .unwrap();
 
-            let e = Normal::new(0.0, 1.3)
-                .unwrap()
-                .sample_iter(rng.clone())
-                .take(self.params.ell)
-                .map(|v| v.round() as i64)
-                .collect_vec();
-            let e = q.reduce_vec_i64(&e);
-
-            for l_i in 0..self.params.ell {
-                let mut sum = 0u64;
-                for n_i in 0..self.params.n {
-                    sum = q.add(sum, q.mul(self.key[l_i][n_i], a[m_i][n_i]));
-                }
-                sum = q.add(sum, e[l_i]);
-                b[m_i][l_i] = q.add(b[m_i][l_i], sum);
-            }
-        }
+        let mut ska = izip!(self.key.outer_iter(), error.outer_iter())
+            .flat_map(|(key_ell_n, e_ell_m)| {
+                let key_ell_n = key_ell_n.as_slice().unwrap();
+                let ska_ell_m = izip!(a.axis_iter(Axis(1)), e_ell_m.iter())
+                    .map(|(m_n, e_value)| {
+                        let mut r = m_n.to_vec();
+                        q.mul_vec(&mut r, key_ell_n);
+                        let r = (r.iter().sum::<u64>()) + *e_value;
+                        r
+                    })
+                    .collect_vec();
+                ska_ell_m
+            })
+            .collect_vec();
+        q.reduce_vec(&mut ska);
+        let ska = Array::from_shape_vec((self.params.ell, self.params.m), ska).unwrap();
 
         PublicKey {
             a,
-            b,
+            b: ska,
             params: self.params.clone(),
         }
     }
@@ -149,73 +156,61 @@ impl PVWSecretKey {
     pub fn decrypt(&self, ct: PVWCiphertext) -> Vec<u64> {
         let q = Modulus::new(self.params.q).unwrap();
 
-        // b - sa
-        let mut d = vec![0u64; self.params.ell];
-        for ell_i in 0..self.params.ell {
-            let mut sum = 0;
-            for n_i in 0..self.params.n {
-                sum = q.add(sum, q.mul(self.key[ell_i][n_i], ct.a[n_i]));
-            }
-            // b_elli - sa_elli
-            d[ell_i] = q.sub(ct.b[ell_i], sum);
-        }
-
-        d.iter_mut()
-            .for_each(|v| *v = (*v >= self.params.q / 2) as u64);
-        d
+        izip!(ct.b.iter(), self.key.outer_iter())
+            .map(|(b_ell, k_ell_n)| {
+                let mut r = ct.a.to_vec();
+                q.mul_vec(&mut r, &k_ell_n.to_vec());
+                let d = q.sub(*b_ell, q.reduce(r.iter().sum::<u64>()));
+                (d >= self.params.q / 2) as u64
+            })
+            .collect()
     }
 
-    pub fn decrypt_without_scaling(&self, ct: PVWCiphertext) -> Vec<u64> {
+    pub fn decrypt_shifted(&self, ct: PVWCiphertext) -> Vec<u64> {
         let q = Modulus::new(self.params.q).unwrap();
 
-        // b - sa
-        let mut d = vec![0u64; self.params.ell];
-        for ell_i in 0..self.params.ell {
-            let mut sum = 0;
-            for n_i in 0..self.params.n {
-                sum = q.add(sum, q.mul(self.key[ell_i][n_i], ct.a[n_i]));
-            }
-            // b_elli - sa_elli
-            d[ell_i] = q.sub(ct.b[ell_i], sum);
-        }
+        izip!(ct.b.iter(), self.key.outer_iter())
+            .map(|(b_ell, k_ell_n)| {
+                let mut r = ct.a.to_vec();
+                q.mul_vec(&mut r, &k_ell_n.to_vec());
 
-        // shift left by q / 4
-        d.iter_mut().for_each(|v| {
-            *v = q.sub(*v, self.params.q / 4);
-        });
+                // shift value left by q/4 so that
+                // indices encrypting 0 are near value 0.
+                let d = q.sub(
+                    q.sub(*b_ell, q.reduce(r.iter().sum::<u64>())),
+                    self.params.q / 4,
+                );
 
-        // After shift left by q / 4, encryption of 0s
-        // should be in the range `p - 850 < v < +850`
-        // with high probability
-        d.iter_mut().for_each(|v| {
-            if *v >= q.modulus() - 850 || *v <= 850 {
-                *v = 0
-            } else {
-                *v = 1
-            }
-        });
-
-        d
+                // Now values encrypting zero should be in range
+                // q - 850 < v < 850 with high probability
+                !(self.params.q - 850 <= d || d <= 850) as u64
+            })
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use ndarray::{Array, Shape};
+
     use super::*;
 
     #[test]
     fn encrypt() {
+        let rng = thread_rng();
         let params = PVWParameters::default();
         for _ in 0..10 {
-            let mut rng = thread_rng();
-            let sk = PVWSecretKey::gen_sk(&params);
+            let sk = PVWSecretKey::random(&params);
             let pk = sk.public_key();
 
             let distr = Uniform::new(0u64, 2);
-            let m = distr.sample_iter(rng).take(params.ell).collect_vec();
+            let m = distr
+                .sample_iter(rng.clone())
+                .take(params.ell)
+                .collect_vec();
             let ct = pk.encrypt(&m);
 
-            let d_m = sk.decrypt_without_scaling(ct);
+            let d_m = sk.decrypt_shifted(ct);
 
             assert_eq!(m, d_m)
         }
@@ -226,10 +221,10 @@ mod tests {
         let params = PVWParameters::default();
 
         let mut rng = thread_rng();
-        let sk = PVWSecretKey::gen_sk(&params);
+        let sk = PVWSecretKey::random(&params);
         let pk = sk.public_key();
 
-        let sk1 = PVWSecretKey::gen_sk(&params);
+        let sk1 = PVWSecretKey::random(&params);
         let pk1 = sk1.public_key();
 
         let ct = pk.encrypt(&[0, 0, 0, 0]);
@@ -238,19 +233,14 @@ mod tests {
         let mut count1 = 0;
         let observations = 1000;
         for _ in 0..observations {
-            // let vals = Uniform::new(0u64, 2)
-            //     .sample_iter(rng.clone())
-            //     .take(4)
-            //     .collect_vec();
-
             let ct = pk.encrypt(&[0, 0, 0, 0]);
             let ct1 = pk1.encrypt(&[0, 0, 0, 0]);
 
-            if sk.decrypt_without_scaling(ct) == vec![0, 0, 0, 0] {
+            if sk.decrypt_shifted(ct) == vec![0, 0, 0, 0] {
                 count += 1;
             }
 
-            if sk.decrypt_without_scaling(ct1) == vec![0, 0, 0, 0] {
+            if sk.decrypt_shifted(ct1) == vec![0, 0, 0, 0] {
                 count1 += 1;
             }
         }
@@ -260,12 +250,11 @@ mod tests {
 
     #[test]
     fn trial() {
-        let rng = thread_rng();
-        let e = Normal::new(0.0, 1.3)
-            .unwrap()
-            .sample_iter(rng.clone())
-            .take(4)
-            .collect_vec();
-        dbg!(e);
+        let mut rng = thread_rng();
+        let params = PVWParameters::default();
+        let sk = PVWSecretKey::random(&params);
+        let pk = sk.public_key();
+        let ct = pk.encrypt(&[0, 1, 0, 1]);
+        dbg!(sk.decrypt(ct));
     }
 }

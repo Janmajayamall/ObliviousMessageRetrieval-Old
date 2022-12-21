@@ -394,7 +394,7 @@ pub fn gen_clues(
             if pertinent_indices.contains(&index) {
                 pvw_pk.encrypt(&[0, 0, 0, 0])
             } else {
-                let tmp_sk = PVWSecretKey::gen_sk(pvw_params);
+                let tmp_sk = PVWSecretKey::random(pvw_params);
                 tmp_sk.public_key().encrypt(&[0, 0, 0, 0])
             }
         })

@@ -34,7 +34,8 @@ pub fn gen_pvw_sk_cts(
         for j in 0..bfv_params.degree() {
             let index = j % sec_len;
             if index < pvw_params.n {
-                values[j] = pvw_sk.key[i][index];
+                // fixme
+                // values[j] = pvw_sk.key[i][index];
             }
         }
         let values_pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();

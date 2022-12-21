@@ -727,7 +727,7 @@ mod tests {
         let pvw_params = Arc::new(PVWParameters::default());
 
         let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
-        let pvw_sk = Arc::new(PVWSecretKey::gen_sk(&pvw_params));
+        let pvw_sk = Arc::new(PVWSecretKey::random(&pvw_params));
         let pvw_pk = Arc::new(pvw_sk.public_key());
 
         let set_size = 1 << 14;
@@ -874,10 +874,10 @@ mod tests {
             n: 450,
             m: 100,
             ell: 4,
-            variance: 2,
+            variance: 1.3,
             q: 65537,
         });
-        let pvw_sk = PVWSecretKey::gen_sk(&pvw_params);
+        let pvw_sk = PVWSecretKey::random(&pvw_params);
         let pvw_pk = pvw_sk.public_key();
 
         let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);

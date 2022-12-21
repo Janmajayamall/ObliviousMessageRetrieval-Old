@@ -13,6 +13,7 @@ dependencies = [
  "fhe-traits",
  "fhe-util",
  "itertools",
+ "ndarray",
  "rand",
  "rayon",
  "statrs",

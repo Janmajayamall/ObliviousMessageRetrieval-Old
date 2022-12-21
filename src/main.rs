@@ -69,10 +69,10 @@ fn run() {
         n: 450,
         m: 100,
         ell: 4,
-        variance: 2,
+        variance: 1.3,
         q: 65537,
     });
-    let pvw_sk = PVWSecretKey::gen_sk(&pvw_params);
+    let pvw_sk = PVWSecretKey::random(&pvw_params);
     let pvw_pk = pvw_sk.public_key();
 
     let mut level_offset = 0;
@@ -108,7 +108,7 @@ fn run() {
             if pertinent_indices.contains(&index) {
                 (pvw_pk.encrypt(&[0, 0, 0, 0]), random_data(data_size))
             } else {
-                let tmp_sk = PVWSecretKey::gen_sk(&pvw_params);
+                let tmp_sk = PVWSecretKey::random(&pvw_params);
                 let tmp_pk = tmp_sk.public_key();
                 (tmp_pk.encrypt(&[0, 0, 0, 0]), random_data(data_size))
             }
