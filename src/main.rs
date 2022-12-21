@@ -72,8 +72,8 @@ fn run() {
         variance: 1.3,
         q: 65537,
     });
-    let pvw_sk = PVWSecretKey::random(&pvw_params);
-    let pvw_pk = pvw_sk.public_key();
+    let pvw_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
 
     let mut level_offset = 0;
 
@@ -106,11 +106,17 @@ fn run() {
     let rows: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..N)
         .map(|index| {
             if pertinent_indices.contains(&index) {
-                (pvw_pk.encrypt(&[0, 0, 0, 0]), random_data(data_size))
+                (
+                    pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng),
+                    random_data(data_size),
+                )
             } else {
-                let tmp_sk = PVWSecretKey::random(&pvw_params);
-                let tmp_pk = tmp_sk.public_key();
-                (tmp_pk.encrypt(&[0, 0, 0, 0]), random_data(data_size))
+                let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+                let tmp_pk = tmp_sk.public_key(&mut rng);
+                (
+                    tmp_pk.encrypt(&[0, 0, 0, 0], &mut rng),
+                    random_data(data_size),
+                )
             }
         })
         .unzip();

@@ -3,7 +3,7 @@ use itertools::{izip, Itertools};
 use ndarray::{Array, Array1, Array2, Axis};
 use rand::{
     distributions::{Distribution, Uniform},
-    thread_rng,
+    CryptoRng, RngCore,
 };
 use statrs::distribution::Normal;
 
@@ -41,10 +41,9 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    pub fn encrypt(&self, m: &[u64]) -> PVWCiphertext {
+    pub fn encrypt<R: RngCore + CryptoRng>(&self, m: &[u64], rng: &mut R) -> PVWCiphertext {
         debug_assert!(m.len() == self.params.ell);
 
-        let mut rng = thread_rng();
         let error = Uniform::new(0u64, 2)
             .sample_iter(rng)
             .take(self.params.m)
@@ -89,13 +88,12 @@ pub struct PVWSecretKey {
 }
 
 impl PVWSecretKey {
-    pub fn random(params: &PVWParameters) -> PVWSecretKey {
-        let mut rng = rand::thread_rng();
+    pub fn random<R: RngCore + CryptoRng>(params: &PVWParameters, rng: &mut R) -> PVWSecretKey {
         let q = Modulus::new(params.q).unwrap();
 
         let sk = Array::from_shape_vec(
             (params.ell, params.n),
-            q.random_vec(params.n * params.ell, &mut rng),
+            q.random_vec(params.n * params.ell, rng),
         )
         .unwrap();
 
@@ -105,13 +103,12 @@ impl PVWSecretKey {
         }
     }
 
-    pub fn public_key(&self) -> PublicKey {
+    pub fn public_key<R: RngCore + CryptoRng>(&self, rng: &mut R) -> PublicKey {
         let q = Modulus::new(self.params.q).unwrap();
-        let mut rng = thread_rng();
 
         let a = Array::from_shape_vec(
             (self.params.n, self.params.m),
-            q.random_vec(self.params.n * self.params.m, &mut rng),
+            q.random_vec(self.params.n * self.params.m, rng),
         )
         .unwrap();
 
@@ -121,7 +118,7 @@ impl PVWSecretKey {
             (self.params.ell, self.params.m),
             q.reduce_vec_i64(
                 &distr
-                    .sample_iter(rng.clone())
+                    .sample_iter(rng)
                     .take(self.params.ell * self.params.m)
                     .map(|v| v.round() as i64)
                     .collect_vec(),
@@ -191,24 +188,24 @@ impl PVWSecretKey {
 
 #[cfg(test)]
 mod tests {
-    use ndarray::{Array, Shape};
 
     use super::*;
+    use rand::thread_rng;
 
     #[test]
     fn encrypt() {
-        let rng = thread_rng();
+        let mut rng = thread_rng();
         let params = PVWParameters::default();
         for _ in 0..10 {
-            let sk = PVWSecretKey::random(&params);
-            let pk = sk.public_key();
+            let sk = PVWSecretKey::random(&params, &mut rng);
+            let pk = sk.public_key(&mut rng);
 
             let distr = Uniform::new(0u64, 2);
             let m = distr
                 .sample_iter(rng.clone())
                 .take(params.ell)
                 .collect_vec();
-            let ct = pk.encrypt(&m);
+            let ct = pk.encrypt(&m, &mut rng);
 
             let d_m = sk.decrypt_shifted(ct);
 
@@ -221,20 +218,18 @@ mod tests {
         let params = PVWParameters::default();
 
         let mut rng = thread_rng();
-        let sk = PVWSecretKey::random(&params);
-        let pk = sk.public_key();
+        let sk = PVWSecretKey::random(&params, &mut rng);
+        let pk = sk.public_key(&mut rng);
 
-        let sk1 = PVWSecretKey::random(&params);
-        let pk1 = sk1.public_key();
-
-        let ct = pk.encrypt(&[0, 0, 0, 0]);
+        let sk1 = PVWSecretKey::random(&params, &mut rng);
+        let pk1 = sk1.public_key(&mut rng);
 
         let mut count = 0;
         let mut count1 = 0;
         let observations = 1000;
         for _ in 0..observations {
-            let ct = pk.encrypt(&[0, 0, 0, 0]);
-            let ct1 = pk1.encrypt(&[0, 0, 0, 0]);
+            let ct = pk.encrypt(&[0, 0, 0, 0], &mut rng);
+            let ct1 = pk1.encrypt(&[0, 0, 0, 0], &mut rng);
 
             if sk.decrypt_shifted(ct) == vec![0, 0, 0, 0] {
                 count += 1;
@@ -246,15 +241,5 @@ mod tests {
         }
         assert!((count as f64 / observations as f64) == 1.0);
         assert!((count1 as f64 / observations as f64) == 0.0);
-    }
-
-    #[test]
-    fn trial() {
-        let mut rng = thread_rng();
-        let params = PVWParameters::default();
-        let sk = PVWSecretKey::random(&params);
-        let pk = sk.public_key();
-        let ct = pk.encrypt(&[0, 1, 0, 1]);
-        dbg!(sk.decrypt(ct));
     }
 }

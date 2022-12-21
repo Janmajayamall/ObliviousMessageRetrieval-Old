@@ -727,8 +727,8 @@ mod tests {
         let pvw_params = Arc::new(PVWParameters::default());
 
         let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
-        let pvw_sk = Arc::new(PVWSecretKey::random(&pvw_params));
-        let pvw_pk = Arc::new(pvw_sk.public_key());
+        let pvw_sk = Arc::new(PVWSecretKey::random(&pvw_params, &mut rng));
+        let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
 
         let set_size = 1 << 14;
         let k = 50;
@@ -877,8 +877,8 @@ mod tests {
             variance: 1.3,
             q: 65537,
         });
-        let pvw_sk = PVWSecretKey::random(&pvw_params);
-        let pvw_pk = pvw_sk.public_key();
+        let pvw_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+        let pvw_pk = pvw_sk.public_key(&mut rng);
 
         let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
@@ -893,7 +893,10 @@ mod tests {
             clues.push(m);
         }
 
-        let clues_ct = clues.iter().map(|c| pvw_pk.encrypt(c)).collect_vec();
+        let clues_ct = clues
+            .iter()
+            .map(|c| pvw_pk.encrypt(c, &mut rng))
+            .collect_vec();
 
         let mut rng = thread_rng();
         let rot_key =

@@ -389,13 +389,14 @@ pub fn gen_clues(
     pertinent_indices: &Vec<usize>,
     set_size: usize,
 ) -> Vec<PVWCiphertext> {
+    let mut rng = thread_rng();
     (0..set_size)
         .map(|index| {
             if pertinent_indices.contains(&index) {
-                pvw_pk.encrypt(&[0, 0, 0, 0])
+                pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
             } else {
-                let tmp_sk = PVWSecretKey::random(pvw_params);
-                tmp_sk.public_key().encrypt(&[0, 0, 0, 0])
+                let tmp_sk = PVWSecretKey::random(pvw_params, &mut rng);
+                tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
             }
         })
         .collect()
