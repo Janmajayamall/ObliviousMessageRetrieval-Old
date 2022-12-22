@@ -1,25 +1,16 @@
+use crate::pvw::{PVWCiphertext, PVWParameters};
+use crate::utils::read_range_coeffs;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
 };
-use fhe_math::rq::traits::TryConvertFrom;
-use fhe_math::rq::Representation;
-use fhe_math::{
-    rq::{Context, Poly},
-    zq::Modulus,
-};
-use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
-use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
+use fhe_math::zq::Modulus;
+use fhe_traits::FheEncoder;
 use itertools::{izip, Itertools};
-use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
-use rand::{Rng, RngCore};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{fs::File, io::Write, path::Path, vec};
-
-use crate::pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
-use crate::utils::read_range_coeffs;
+use std::vec;
 
 pub fn mul_many(
     values: &mut Vec<Ciphertext>,
@@ -711,13 +702,20 @@ pub fn phase2(
 mod tests {
     use super::*;
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
+    use crate::pvw::PVWSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys,
         gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, rot_to_exponent,
         solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
+    use fhe_math::rq::traits::TryConvertFrom;
+    use fhe_math::rq::{Context, Poly, Representation};
+    use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter};
     use itertools::izip;
+    use rand::distributions::Uniform;
+    use rand::prelude::Distribution;
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_phase1_and_phase2() {

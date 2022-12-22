@@ -1,23 +1,11 @@
 use crate::pvw::{PVWParameters, PVWSecretKey};
-use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use fhe::bfv::{
-    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
-    Plaintext, RelinearizationKey, SecretKey,
-};
-use fhe_math::rq::traits::TryConvertFrom;
-use fhe_math::rq::Representation;
-use fhe_math::{
-    rq::{Context, Poly},
-    zq::Modulus,
-};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, SecretKey};
+
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
-use fhe_util::{div_ceil, ilog2, sample_vec_cbd};
 use itertools::Itertools;
-use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
-use rand::{Rng, RngCore};
-use std::collections::HashMap;
+use rand::thread_rng;
 use std::sync::Arc;
-use std::{fs::File, io::Write, path::Path, vec};
+use std::vec;
 
 pub fn gen_pvw_sk_cts(
     bfv_params: &Arc<BfvParameters>,
@@ -108,6 +96,8 @@ pub fn construct_rhs(values: &[u64], m: usize, m_row_span: usize, q_mod: u64) ->
 mod tests {
     use super::*;
     use crate::utils::{assign_buckets, solve_equations};
+    use fhe_math::zq::Modulus;
+    use rand::{distributions::Uniform, thread_rng, Rng};
 
     #[test]
     fn test_assign_buckets() {
