@@ -35,7 +35,10 @@ use server::{decrypt_pvw, phase1, phase2, powers_of_x, pv_compress, pv_weights, 
 
 use crate::client::{construct_lhs, construct_rhs, pv_decompress};
 use crate::server::{finalise_combinations, mul_many, pv_unpack};
-use crate::utils::{assign_buckets, gen_rlk_keys, gen_rot_keys, random_data, solve_equations};
+use crate::utils::{
+    assign_buckets, gen_rlk_keys, gen_rot_keys_inner_product, gen_rot_keys_pv_selector,
+    random_data, solve_equations,
+};
 
 const MODULI_OMR: &[u64; 15] = &[
     268369921,
@@ -58,7 +61,22 @@ const DEGREE: usize = 1 << 11;
 const MODULI_OMR_PT: &[u64; 1] = &[65537];
 const SET_SIZE: usize = 1 << 14;
 
+// SRLC params
+const K: usize = 50;
+const M: usize = 100;
+const DATA_SIZE: usize = 256;
+// m_row_span = 256 bytes / 2 bytes
+// since each row can store upto 2 bytes
+// of data.
+const M_ROW_SPAN: usize = 128;
+const GAMMA: usize = 5;
+// no of cts required to accomodate all
+// rows of buckets; = CEIL((M * M_ROW_SPACE) / DEGREE)
+const CT_SPAN_COUNT: usize = 7;
+
 pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey) {
+    println!("Generating clues and messages...");
+
     assert!(set_size > 50);
     let mut rng = thread_rng();
 
@@ -85,12 +103,15 @@ pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey)
 
     let payload_distr = Uniform::new(0u8, u8::MAX);
 
+    let other = {
+        let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+        tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+    };
     (0..set_size).for_each(|index| {
         let clue = if pertinent_indices.contains(&index) {
             pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
         } else {
-            let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
-            tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+            other.clone()
         };
         let payload = payload_distr
             .sample_iter(rng.clone())
@@ -109,7 +130,7 @@ pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey)
     });
 }
 
-fn run1(set_size: usize, gen_sample: bool) {
+fn run1(gen_sample: bool) {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -133,24 +154,26 @@ fn run1(set_size: usize, gen_sample: bool) {
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
     // pvw secret key encrypted under bfv
+    println!("Generating client keys");
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
     let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
     let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
-    let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
-    let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
+    let rot_keys = gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9);
+    let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
 
     // Generate sample data //
     if gen_sample {
-        gen_data(set_size, &pvw_params, &pvw_pk);
+        gen_data(SET_SIZE, &pvw_params, &pvw_pk);
     }
 
     let mut pertinent_indices: Vec<usize> = bincode::deserialize(
         &std::fs::read("target/omr/pertinent-indices.bin").expect("Indices file missing!"),
     )
     .unwrap();
+    println!("Pertinent indices: {pertinent_indices:?}");
 
-    let data: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..set_size)
+    let data: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..SET_SIZE)
         .map(|index| {
             let clue: PVWCiphertext = bincode::deserialize(
                 &std::fs::read(format!("target/omr/clue-{index}.bin")).expect("Clue file missing!"),
@@ -169,17 +192,20 @@ fn run1(set_size: usize, gen_sample: bool) {
         .unzip();
     let clues = data.0;
     let payloads = data.1;
-    let mut pertinent_payloads = vec![];
-    (0..set_size)
-        .zip(payloads.iter())
-        .for_each(|(index, load)| {
-            if pertinent_indices.contains(&index) {
-                pertinent_payloads.push(load.clone());
-            }
-        });
+    let payloads = gen_paylods(SET_SIZE);
+    // let mut pertinent_payloads = vec![];
+    // (0..SET_SIZE)
+    //     .zip(payloads.iter())
+    //     .for_each(|(index, load)| {
+    //         if pertinent_indices.contains(&index) {
+    //             pertinent_payloads.push(load.clone());
+    //         }
+    //     });
 
     // SERVER SIDE //
-    let (assigned_buckets, assigned_weights) = assign_buckets(100, 5, MODULI_OMR_PT[0], set_size);
+    let (assigned_buckets, assigned_weights) = assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE);
+    println!("Server: Running phase1");
+    let now = std::time::Instant::now();
     let mut pertinency_cts = phase1(
         &bfv_params,
         &pvw_params,
@@ -188,10 +214,11 @@ fn run1(set_size: usize, gen_sample: bool) {
         &rlk_keys,
         &clues,
         &bfv_sk,
-        set_size,
+        SET_SIZE,
         DEGREE,
     );
-
+    let phase1_time = now.elapsed();
+    println!("Server: Running phase2");
     let (compressed_pv, msg_cts) = phase2(
         &assigned_buckets,
         &assigned_weights,
@@ -203,23 +230,45 @@ fn run1(set_size: usize, gen_sample: bool) {
         32,
         DEGREE,
         10,
-        set_size,
-        5,
-        7,
-        128,
+        SET_SIZE,
+        GAMMA,
+        CT_SPAN_COUNT,
+        M_ROW_SPAN,
         &bfv_sk,
     );
+    let phase2_time = now.elapsed() - phase1_time;
+    let total_time = now.elapsed();
+    println!("Server: Phase1 took: {phase1_time:?}; Phase2 took: {phase2_time:?}");
+    println!("Server: Total server time: {total_time:?}");
 
     // CLIENT SIDE //
+    println!("Client: Processing digest");
+    let now = std::time::Instant::now();
     let pv = pv_decompress(&bfv_params, &compressed_pv, &bfv_sk);
+    {
+        // Checking ct encoding pv is correct (i.e. Phase 1)
+        let decompressed_pv = pv_decompress(&bfv_params, &compressed_pv, &bfv_sk);
+
+        let mut res_indices = vec![];
+        decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
+            if *bit == 1 {
+                res_indices.push(index);
+            }
+        });
+        pertinent_indices.sort();
+        assert_eq!(pertinent_indices, res_indices);
+        // println!("Expected indices {:?}", pertinent_indices);
+        // println!("Res indices      {:?}", res_indices);
+        // assert!(false);
+    }
     let lhs = construct_lhs(
         &pv,
         assigned_buckets,
         assigned_weights,
-        100,
-        50,
-        5,
-        set_size,
+        M,
+        K,
+        GAMMA,
+        SET_SIZE,
     );
     let m_rows = msg_cts
         .iter()
@@ -227,10 +276,19 @@ fn run1(set_size: usize, gen_sample: bool) {
             Vec::<u64>::try_decode(&bfv_sk.try_decrypt(m).unwrap(), Encoding::simd()).unwrap()
         })
         .collect_vec();
-    let rhs = construct_rhs(&m_rows, 100, 128, MODULI_OMR_PT[0]);
+    let rhs = construct_rhs(&m_rows, M, M_ROW_SPAN, MODULI_OMR_PT[0]);
     let res_payloads = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
+    println!("Client: processing took: {:?}", now.elapsed());
 
-    assert_eq!(pertinent_payloads, res_payloads);
+    let expected_pertinent_payloads = pertinent_indices
+        .iter()
+        .map(|index| payloads[*index].clone())
+        .collect_vec();
+
+    println!("{expected_pertinent_payloads:?}");
+    println!("{res_payloads:?}");
+
+    assert_eq!(expected_pertinent_payloads, res_payloads);
 }
 fn run() {
     let mut rng = thread_rng();
@@ -309,8 +367,8 @@ fn run() {
     let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
 
     // rotation keys
-    let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
-    let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
+    let rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 10, 9);
+    let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
 
     println!("///////// SERVER SIDE //////////");
     let server_time = std::time::SystemTime::now();
@@ -342,9 +400,9 @@ fn run() {
             &bfv_params,
             &decrypted_clues[i],
             &rlk_keys,
-            &bfv_sk,
             level_offset,
             "params_850.bin",
+            &bfv_sk,
         );
         println!(
             "Range fn for ell index {} took {:?}",
@@ -522,7 +580,7 @@ fn run() {
 }
 
 fn main() {
-    run1(51, true);
+    run1(true);
 }
 
 #[cfg(test)]

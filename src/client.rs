@@ -25,23 +25,27 @@ pub fn gen_pvw_sk_cts(
     bfv_sk: &SecretKey,
     pvw_sk: &PVWSecretKey,
 ) -> Vec<Ciphertext> {
+    debug_assert!(pvw_sk.key.dim().0 == pvw_params.ell);
+
     let mut rng = thread_rng();
-    let mut cts = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
 
     let sec_len = pvw_params.n.next_power_of_two();
-    for i in 0..pvw_params.ell {
-        let mut values = vec![0u64; bfv_params.degree()];
-        for j in 0..bfv_params.degree() {
-            let index = j % sec_len;
-            if index < pvw_params.n {
-                // fixme
-                // values[j] = pvw_sk.key[i][index];
+    pvw_sk
+        .key
+        .outer_iter()
+        .map(|ell_n| {
+            let mut values = vec![0u64; bfv_params.degree()];
+            for j in 0..bfv_params.degree() {
+                let index = j % sec_len;
+                if index < pvw_params.n {
+                    // fixme
+                    values[j] = ell_n[index];
+                }
             }
-        }
-        let values_pt = Plaintext::try_encode(&values, Encoding::simd(), &bfv_params).unwrap();
-        cts[i] = bfv_sk.try_encrypt(&values_pt, &mut rng).unwrap();
-    }
-    cts
+            let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
+            bfv_sk.try_encrypt(&values_pt, &mut rng).unwrap()
+        })
+        .collect_vec()
 }
 
 pub fn pv_decompress(
@@ -64,18 +68,18 @@ pub fn pv_decompress(
 }
 
 pub fn construct_lhs(
-    pv: &Vec<u64>,
+    pv: &[u64],
     assigned_buckets: Vec<Vec<usize>>,
     assigned_weights: Vec<Vec<u64>>,
     m: usize,
     k: usize,
     gamma: usize,
-    N: usize,
+    set_size: usize,
 ) -> Vec<Vec<u64>> {
     let mut lhs = vec![vec![0u64; k]; m];
 
     let mut overflow_counter = 0;
-    for i in 0..N {
+    for i in 0..set_size {
         if pv[i] == 1 {
             if overflow_counter < k {
                 for j in 0..gamma {
@@ -94,9 +98,9 @@ pub fn construct_lhs(
     lhs
 }
 
-pub fn construct_rhs(values: &[u64], m: usize, payload_size: usize, q_mod: u64) -> Vec<Vec<u64>> {
-    values[..m * payload_size]
-        .chunks(payload_size)
+pub fn construct_rhs(values: &[u64], m: usize, m_row_span: usize, q_mod: u64) -> Vec<Vec<u64>> {
+    values[..m * m_row_span]
+        .chunks(m_row_span)
         .map(|bucket| bucket.to_vec())
         .collect()
 }

@@ -164,9 +164,10 @@ pub fn range_fn(
     bfv_params: &Arc<BfvParameters>,
     input: &Ciphertext,
     rlk_keys: &HashMap<usize, RelinearizationKey>,
-    sk: &SecretKey,
+
     level_offset: usize,
     params_path: &str,
+    sk: &SecretKey,
 ) -> Ciphertext {
     // let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level `level_offset` + 4
@@ -370,6 +371,7 @@ pub fn inner_sum(
 /// in `poly_degree` coefficients
 /// into `poly_degree` ciphertexts
 /// encrypting each coefficient value.
+#[allow(clippy::too_many_arguments)]
 pub fn pv_unpack(
     bfv_params: &Arc<BfvParameters>,
     rot_keys: &HashMap<usize, GaloisKey>,
@@ -457,12 +459,13 @@ pub fn pv_compress(
 ///
 /// That is, for each payload, `PV[i] * a`, where `a` encodes
 /// `payload * weight` at respective bucket slots.
+#[allow(clippy::too_many_arguments)]
 pub fn pv_weights(
     assigned_buckets: &Vec<Vec<usize>>,
     assigned_weights: &Vec<Vec<u64>>,
     pv: &Vec<Ciphertext>,
     payloads: &[Vec<u64>],
-    payload_size: usize,
+    m_row_span: usize,
     bfv_params: &Arc<BfvParameters>,
     batch_size: usize,
     ct_span_count: usize,
@@ -478,11 +481,11 @@ pub fn pv_weights(
     for batch_index in 0..batch_size {
         let mut pt = vec![vec![0u64; bfv_params.degree()]; ct_span_count];
         for i in 0..gamma {
-            // think of single bucket as spanning across `payload_size`
+            // think of single bucket as spanning across `m_row_span`
             // no. of rows of plaintext vector
-            let start_row = assigned_buckets[batch_index + offset][i] * payload_size;
+            let start_row = assigned_buckets[batch_index + offset][i] * m_row_span;
             let weight = assigned_weights[batch_index + offset][i];
-            for payload_index in 0..payload_size {
+            for payload_index in 0..m_row_span {
                 let row = start_row + payload_index;
                 let span_col = row / degree;
                 let span_row = row % degree;
@@ -515,15 +518,15 @@ pub fn finalise_combinations(
     rhs: &mut [Ciphertext],
     m: usize,
     degree: usize,
-    payload_size: usize,
+    m_row_span: usize,
 ) {
-    // payload_size = row span of a single bucket
-    // therefore, m * payload_size = total rows required
+    // m_row_span = row span of a single bucket
+    // therefore, m * m_row_span = total rows required
     //
-    assert!(m * payload_size <= rhs.len() * degree);
+    debug_assert!(m * m_row_span <= rhs.len() * degree);
 
     pv_weights.iter().for_each(|pv_by_w| {
-        assert!(pv_by_w.len() == rhs.len());
+        debug_assert!(pv_by_w.len() == rhs.len());
         izip!(pv_by_w.iter(), rhs.iter_mut()).for_each(|(pv, rh)| {
             *rh += pv;
         });
@@ -533,6 +536,7 @@ pub fn finalise_combinations(
 /// Does the following:
 /// 1. Calls `decrypt_pvw` to decrypt clues values    
 /// 2. Calls `range_fn` to reduce decrypted value to either 0 or 1.
+#[allow(clippy::too_many_arguments)]
 pub fn phase1(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &PVWParameters,
@@ -566,7 +570,7 @@ pub fn phase1(
             // level 1; decryption consumes 1
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
-                .map(|d| range_fn(bfv_params, d, rlk_keys, sk, 1, "params_850.bin"))
+                .map(|d| range_fn(bfv_params, d, rlk_keys, 1, "params_850.bin", sk))
                 .collect_vec();
 
             // level 9; range fn consumes 8
@@ -585,6 +589,7 @@ pub fn phase1(
 /// 1. calls `pv_unpack`
 /// 2. compresses unpacked ct into PV ct
 /// 3. assigns weights to buckets
+#[allow(clippy::too_many_arguments)]
 pub fn phase2(
     assigned_buckets: &Vec<Vec<usize>>,
     assigned_weights: &Vec<Vec<u64>>,
@@ -599,7 +604,7 @@ pub fn phase2(
     set_size: usize,
     gamma: usize,
     ct_span_count: usize,
-    payload_size: usize,
+    m_row_span: usize,
     sk: &SecretKey,
 ) -> (Ciphertext, Vec<Ciphertext>) {
     debug_assert!(degree % batch_size == 0);
@@ -645,7 +650,7 @@ pub fn phase2(
                     assigned_weights,
                     &unpacked_cts,
                     payloads,
-                    payload_size,
+                    m_row_span,
                     bfv_params,
                     batch_size,
                     ct_span_count,
@@ -655,7 +660,7 @@ pub fn phase2(
                     degree,
                 );
 
-                finalise_combinations(&pv_we, &mut rhs, 100, degree, payload_size);
+                finalise_combinations(&pv_we, &mut rhs, 100, degree, m_row_span);
 
                 offset += batch_size;
             }
@@ -696,7 +701,7 @@ pub fn phase2(
 
     pertinency_vectors[0].mod_switch_to_next_level();
     for r in &mut rhs[0] {
-        r.mod_switch_to_last_level();
+        r.mod_switch_to_next_level();
     }
 
     (pertinency_vectors[0].clone(), rhs[0].clone())
@@ -707,8 +712,9 @@ mod tests {
     use super::*;
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
     use crate::utils::{
-        assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys, gen_rot_keys,
-        powers_of_x_poly, range_fn_poly, rot_to_exponent, solve_equations,
+        assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys,
+        gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, rot_to_exponent,
+        solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use itertools::izip;
@@ -737,6 +743,7 @@ mod tests {
         let data_size_in_bytes = 256;
         let payload_size = data_size_in_bytes / 2; // t = 65537 ~ 2 ** 16 ~ 16 bits
         let ct_span_count = (((m * payload_size) as f64) / (DEGREE as f64)).ceil() as usize;
+        dbg!(ct_span_count, payload_size);
 
         // gen clues
         let mut pertinent_indices = gen_pertinent_indices(50, set_size);
@@ -753,8 +760,8 @@ mod tests {
         let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
 
         let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
-        let rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 10, 9);
-        let inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, 12, 11);
+        let rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 10, 9);
+        let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
 
         let (assigned_buckets, assigned_weights) =
             assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size);
@@ -775,7 +782,6 @@ mod tests {
         let phase1_time = now.elapsed();
 
         println!("Phase 2 starting...");
-
         let (res_pv, res_rhs) = phase2(
             &assigned_buckets,
             &assigned_weights,
@@ -815,7 +821,7 @@ mod tests {
         //     });
         //     println!("Expected indices {:?}", pertinent_indices);
         //     println!("Res indices      {:?}", res_indices);
-        //     assert!(false);
+        //     // assert!(false);
         // }
 
         let decompressed_pv = pv_decompress(&bfv_params, &res_pv, &bfv_sk);
@@ -847,7 +853,7 @@ mod tests {
             .map(|index| payloads[*index].clone())
             .collect_vec();
 
-        // assert_eq!(res, expected_pertinent_payloads);
+        assert_eq!(res, expected_pertinent_payloads);
     }
 
     #[test]
@@ -977,7 +983,7 @@ mod tests {
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         let mut now = std::time::SystemTime::now();
-        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, &bfv_sk, 1, "params_850.bin");
+        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, 1, "params_850.bin", &bfv_sk);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
@@ -1086,8 +1092,9 @@ mod tests {
 
         // rotation keys
         let ct_level = 1;
-        let mut rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, ct_level, ct_level - 1);
-        let mut inner_sum_rot_keys = gen_rot_keys(&bfv_params, &bfv_sk, ct_level + 2, ct_level + 1);
+        let mut rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, ct_level, ct_level - 1);
+        let mut inner_sum_rot_keys =
+            gen_rot_keys_inner_product(&bfv_params, &bfv_sk, ct_level + 2, ct_level + 1);
         let mut i = 1;
 
         let batch_size = 32;

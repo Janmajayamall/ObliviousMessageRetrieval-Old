@@ -4,8 +4,8 @@ use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
     zq::Modulus,
 };
-use itertools::{Itertools, MultiProduct};
-use rand::{distributions::Uniform, prelude::Distribution, seq::index};
+use itertools::Itertools;
+use rand::{distributions::Uniform, prelude::Distribution};
 use rand::{thread_rng, Rng};
 use std::io::Write;
 use std::sync::Arc;
@@ -69,14 +69,14 @@ pub fn assign_buckets(
     no_of_buckets: usize,
     gamma: usize,
     q_mod: u64,
-    N: usize,
+    set_size: usize,
 ) -> (Vec<Vec<usize>>, Vec<Vec<u64>>) {
     let mut rng = thread_rng();
 
-    let mut buckets = vec![vec![]; N];
-    let mut weights = vec![vec![]; N];
+    let mut buckets = vec![vec![]; set_size];
+    let mut weights = vec![vec![]; set_size];
 
-    for row_index in 0..N {
+    for row_index in 0..set_size {
         while buckets[row_index].len() != gamma {
             // random bucket
             let bucket = rng.sample(Uniform::new(0, no_of_buckets));
@@ -96,17 +96,6 @@ pub fn assign_buckets(
     (buckets, weights)
 }
 
-pub fn sub_vec(a: &Vec<u64>, b: &Vec<u64>, q_mod: u64) -> Vec<u64> {
-    let modulus = Modulus::new(q_mod).unwrap();
-    let mut a = a.clone();
-    modulus.sub_vec(&mut a, b);
-    a
-}
-
-pub fn scalar_mul_vec() -> Vec<u64> {
-    todo!()
-}
-
 pub fn scale_factor(a: u64, b: u64, q_mod: u64) -> u64 {
     let modulus = Modulus::new(q_mod).unwrap();
     modulus.mul(a, modulus.inv(b).unwrap())
@@ -114,14 +103,19 @@ pub fn scale_factor(a: u64, b: u64, q_mod: u64) -> u64 {
 
 /// Scales b by `scale_factor`
 /// and then perform a - b
-pub fn sub_scaled_by_ratio(a: &Vec<u64>, b: &Vec<u64>, q_mod: u64, scale_factor: u64) -> Vec<u64> {
+pub fn sub_scaled_by_ratio(a: &[u64], b: &[u64], q_mod: u64, scale_factor: u64) -> Vec<u64> {
     let modulus = Modulus::new(q_mod).unwrap();
 
-    let b_scaled = b.iter().map(|v| modulus.mul(*v, scale_factor)).collect();
-    sub_vec(a, &b_scaled, q_mod)
+    let b = b
+        .iter()
+        .map(|v| modulus.mul(*v, scale_factor))
+        .collect_vec();
+    let mut a = a.to_vec();
+    modulus.sub_vec(&mut a, &b);
+    a
 }
 
-/// Note that RHS is of 2 dimensions, since we attempt to solve all sets at once
+/// Note that RHS is of dim 2, since we attempt to solve all sets at once
 pub fn solve_equations(
     mut lhs: Vec<Vec<u64>>,
     mut rhs: Vec<Vec<u64>>,
@@ -134,13 +128,8 @@ pub fn solve_equations(
     let mut pivot_rows = vec![-1; cols];
 
     for pi in 0..cols {
-        let mut pivot_row = pi;
-        if lhs[pivot_row][pi] > 0 {
-            pivot_rows[pi] = pivot_row as i32;
-        }
         for row_index in 0..rows {
-            // Only check whether row can be used as pivot
-            // if not already used
+            // A row can't be pivot more than once
             if pivot_rows.contains(&(row_index as i32)) {
                 continue;
             } else if (pivot_rows[pi] != -1
@@ -153,8 +142,8 @@ pub fn solve_equations(
 
         // Not solvable
         if pivot_rows[pi] == -1 {
-            dbg!("OOPS");
-            // dbg!(&pivot_rows);
+            println!("Unsolvable!");
+
             break;
         }
 
@@ -307,7 +296,7 @@ pub fn gen_rlk_keys(
     let mut rng = thread_rng();
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
 
-    let mut now = std::time::SystemTime::now();
+    // let mut now = std::time::SystemTime::now();
     for i in 0..bfv_params.max_level() {
         let key_level = {
             if i == 0 {
@@ -319,12 +308,12 @@ pub fn gen_rlk_keys(
         let rlk = RelinearizationKey::new_leveled(sk, i, key_level, &mut rng).unwrap();
         keys.insert(i, rlk);
     }
-    println!("RLK gen took {:?}", now.elapsed().unwrap());
+    // println!("RLK gen took {:?}", now.elapsed().unwrap());
 
     keys
 }
 
-pub fn gen_rot_keys(
+pub fn gen_rot_keys_inner_product(
     bfv_params: &Arc<BfvParameters>,
     sk: &SecretKey,
     ct_level: usize,
@@ -345,6 +334,42 @@ pub fn gen_rot_keys(
         keys.insert(i, key);
         i *= 2;
     }
+    keys.insert(
+        bfv_params.degree() * 2 - 1,
+        GaloisKey::new(
+            sk,
+            bfv_params.degree() * 2 - 1,
+            ct_level,
+            ksk_level,
+            &mut rng,
+        )
+        .unwrap(),
+    );
+    keys
+}
+
+pub fn gen_rot_keys_pv_selector(
+    bfv_params: &Arc<BfvParameters>,
+    sk: &SecretKey,
+    ct_level: usize,
+    ksk_level: usize,
+) -> HashMap<usize, GaloisKey> {
+    let mut rng = thread_rng();
+    let mut keys = HashMap::<usize, GaloisKey>::new();
+    let mut i = 1;
+    // left rot by 1
+    keys.insert(
+        1,
+        GaloisKey::new(
+            sk,
+            rot_to_exponent(i as u64, bfv_params),
+            ct_level,
+            ksk_level,
+            &mut rng,
+        )
+        .unwrap(),
+    );
+    // switch rows
     keys.insert(
         bfv_params.degree() * 2 - 1,
         GaloisKey::new(
@@ -386,17 +411,20 @@ pub fn gen_pertinent_indices(size: usize, set_size: usize) -> Vec<usize> {
 pub fn gen_clues(
     pvw_params: &PVWParameters,
     pvw_pk: &PublicKey,
-    pertinent_indices: &Vec<usize>,
+    pertinent_indices: &[usize],
     set_size: usize,
 ) -> Vec<PVWCiphertext> {
     let mut rng = thread_rng();
+
+    let tmp_sk = PVWSecretKey::random(pvw_params, &mut rng);
+    let other = tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng);
+
     (0..set_size)
         .map(|index| {
             if pertinent_indices.contains(&index) {
                 pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
             } else {
-                let tmp_sk = PVWSecretKey::random(pvw_params, &mut rng);
-                tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+                other.clone()
             }
         })
         .collect()
@@ -431,7 +459,7 @@ mod tests {
     fn test_assign_buckets() {
         let rng = thread_rng();
         let k = 50;
-        let m = k * 2;
+        let m = 100;
         let gamma = 5;
         let q_mod = 65537;
 
