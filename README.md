@@ -30,9 +30,9 @@ Server comes to Alice's rescue, by enabling Oblivious message retrieval. All Ali
 
 > Note that you must have `rust` installed.
 
-To run, clone this repository and navigate inside it. Then type `cargo run --release -- -g`.
+To run demo, clone this repository and navigate inside it. Then type `cargo run --release 1` for OMR demo.
 
-> `-g` flag is required when running for the first time to generate sample transactions and clues.
+To calculate _detection key size_ run `cargo run --release 2`.
 
 For the demo, transactions set size is set to `2^14` and we have assumed `50` are pertinent to the client.
 

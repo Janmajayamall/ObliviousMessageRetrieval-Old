@@ -155,10 +155,10 @@ fn calculate_detection_key_size() {
         // dbg!(gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9).keys());
         // dbg!(gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11).keys())
     };
-    dbg!(size);
+    println!("Detection key size: {}MB", size as f64 / 1000000.0)
 }
 
-fn run(gen_sample: bool) {
+fn run() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -191,9 +191,7 @@ fn run(gen_sample: bool) {
     let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
 
     // Generate sample data //
-    if gen_sample {
-        gen_data(SET_SIZE, &pvw_params, &pvw_pk);
-    }
+    gen_data(SET_SIZE, &pvw_params, &pvw_pk);
 
     let mut pertinent_indices: Vec<usize> = bincode::deserialize(
         &std::fs::read("target/omr/pertinent-indices.bin")
@@ -312,7 +310,17 @@ fn run(gen_sample: bool) {
 }
 
 fn main() {
-    calculate_detection_key_size()
-    // let flag = std::env::args().nth(1).map_or_else(|| false, |g| g == "-g");
-    // run(flag);
+    let val = std::env::args().nth(1).map(|v| {
+        v.as_str()
+            .parse::<usize>()
+            .expect("Choose 1 to run demo. Choose 2 to display detection key size")
+    });
+
+    match val {
+        Some(1) => run(),
+        Some(2) => calculate_detection_key_size(),
+        _ => {
+            println!("Choose 1 to run demo. Choose 2 to display detection key size")
+        }
+    }
 }
