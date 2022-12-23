@@ -14,6 +14,7 @@ dependencies = [
  "fhe-util",
  "itertools",
  "ndarray",
+ "protobuf",
  "rand",
  "rayon",
  "serde",
@@ -162,7 +163,7 @@ checksum = "90e5c1c8368803113bf0c9584fc495a58b86dc8a29edbf8fe877d21d9507e797"
 [[package]]
 name = "fhe"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#2f957b076b634c82b7d5c5238ff64f70ec223802"
 dependencies = [
  "fhe-math",
  "fhe-traits",
@@ -182,7 +183,7 @@ dependencies = [
 [[package]]
 name = "fhe-math"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#2f957b076b634c82b7d5c5238ff64f70ec223802"
 dependencies = [
  "crypto-bigint",
  "fhe-traits",
@@ -203,7 +204,7 @@ dependencies = [
 [[package]]
 name = "fhe-traits"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#2f957b076b634c82b7d5c5238ff64f70ec223802"
 dependencies = [
  "rand",
 ]
@@ -211,7 +212,7 @@ dependencies = [
 [[package]]
 name = "fhe-util"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#66c9d16a58d990b8e0f1a87b95b0b497cf8e2c07"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=main#2f957b076b634c82b7d5c5238ff64f70ec223802"
 dependencies = [
  "itertools",
  "num-bigint-dig",
@@ -269,9 +270,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.138"
+version = "0.2.139"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db6d7e329c562c5dfab7a46a2afabc8b987ab9a4834c9d1ca04dc54c1546cef8"
+checksum = "201de327520df007757c1f0adce6e827fe8562fbc28bfd9c15571c66ca1f5f79"
 
 [[package]]
 name = "libm"

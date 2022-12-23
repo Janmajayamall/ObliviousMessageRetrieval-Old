@@ -1,7 +1,10 @@
 use client::gen_pvw_sk_cts;
-use fhe::bfv::{BfvParametersBuilder, Encoding, GaloisKey, SecretKey};
+use fhe::bfv::{
+    BfvParametersBuilder, Encoding, GaloisKey, GaloisKeyProto, RelinearizationKeyProto, SecretKey,
+};
 use fhe_traits::{FheDecoder, FheDecrypter};
 use itertools::Itertools;
+use protobuf::{Message, MessageDyn};
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use std::io::Write;
 use std::sync::Arc;
@@ -14,8 +17,8 @@ mod utils;
 
 use crate::client::{construct_lhs, construct_rhs, pv_decompress};
 use crate::utils::{
-    assign_buckets, gen_rlk_keys, gen_rot_keys_inner_product, gen_rot_keys_pv_selector,
-    solve_equations,
+    assign_buckets, gen_rlk_keys, gen_rlk_keys_levelled, gen_rot_keys_inner_product,
+    gen_rot_keys_pv_selector, solve_equations,
 };
 use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
 use server::{phase1, phase2};
@@ -111,6 +114,50 @@ pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey)
     });
 }
 
+fn calculate_detection_key_size() {
+    let mut rng = thread_rng();
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .set_moduli(MODULI_OMR)
+            .build()
+            .unwrap(),
+    );
+    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+    let mut size = 0;
+    {
+        size += GaloisKeyProto::from(&GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap())
+            .compute_size();
+    }
+    {
+        gen_rlk_keys_levelled(&bfv_params, &bfv_sk)
+            .into_values()
+            .for_each(|k| {
+                size += RelinearizationKeyProto::from(&k).compute_size();
+            });
+        // dbg!(gen_rlk_keys_levelled(&bfv_params, &bfv_sk).keys());
+    }
+    {
+        gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9)
+            .into_values()
+            .for_each(|k| {
+                size += GaloisKeyProto::from(&k).compute_size();
+            });
+
+        gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11)
+            .into_values()
+            .for_each(|k| {
+                size += GaloisKeyProto::from(&k).compute_size();
+            });
+
+        // dbg!(gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9).keys());
+        // dbg!(gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11).keys())
+    };
+    dbg!(size);
+}
+
 fn run(gen_sample: bool) {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
@@ -139,7 +186,7 @@ fn run(gen_sample: bool) {
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
     let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
-    let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+    let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk);
     let rot_keys = gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9);
     let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
 
@@ -265,6 +312,7 @@ fn run(gen_sample: bool) {
 }
 
 fn main() {
-    let flag = std::env::args().nth(1).map_or_else(|| false, |g| g == "-g");
-    run(flag);
+    calculate_detection_key_size()
+    // let flag = std::env::args().nth(1).map_or_else(|| false, |g| g == "-g");
+    // run(flag);
 }

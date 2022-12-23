@@ -313,6 +313,24 @@ pub fn gen_rlk_keys(
     keys
 }
 
+pub fn gen_rlk_keys_levelled(
+    bfv_params: &Arc<BfvParameters>,
+    sk: &SecretKey,
+) -> HashMap<usize, RelinearizationKey> {
+    let mut rng = thread_rng();
+    let mut keys = HashMap::<usize, RelinearizationKey>::new();
+
+    // for powers of x; range fn;
+    for i in 1..11 {
+        keys.insert(
+            i,
+            RelinearizationKey::new_leveled(sk, i, i - 1, &mut rng).unwrap(),
+        );
+    }
+
+    keys
+}
+
 pub fn gen_rot_keys_inner_product(
     bfv_params: &Arc<BfvParameters>,
     sk: &SecretKey,
