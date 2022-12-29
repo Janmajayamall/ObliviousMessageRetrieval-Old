@@ -1,5 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use fhe::bfv::{BfvParameters, GaloisKey, RelinearizationKey, SecretKey};
+use fhe::bfv::{BfvParameters, RelinearizationKey, SecretKey, EvaluationKey, EvaluationKeyBuilder};
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
     zq::Modulus,
@@ -336,34 +336,11 @@ pub fn gen_rot_keys_inner_product(
     sk: &SecretKey,
     ct_level: usize,
     ksk_level: usize,
-) -> HashMap<usize, GaloisKey> {
+) -> EvaluationKey {
     let mut rng = thread_rng();
-    let mut keys = HashMap::<usize, GaloisKey>::new();
-    let mut i = 1;
-    while i < bfv_params.degree() / 2 {
-        let key = GaloisKey::new(
-            sk,
-            rot_to_exponent(i as u64, bfv_params),
-            ct_level,
-            ksk_level,
-            &mut rng,
-        )
-        .unwrap();
-        keys.insert(i, key);
-        i *= 2;
-    }
-    keys.insert(
-        bfv_params.degree() * 2 - 1,
-        GaloisKey::new(
-            sk,
-            bfv_params.degree() * 2 - 1,
-            ct_level,
-            ksk_level,
-            &mut rng,
-        )
-        .unwrap(),
-    );
-    keys
+    let mut evk = EvaluationKeyBuilder::new_leveled(sk, ct_level, ksk_level).unwrap();
+    assert!(evk.enable_inner_sum().is_ok());
+    evk.build(&mut rng).unwrap()
 }
 
 pub fn gen_rot_keys_pv_selector(
@@ -371,35 +348,15 @@ pub fn gen_rot_keys_pv_selector(
     sk: &SecretKey,
     ct_level: usize,
     ksk_level: usize,
-) -> HashMap<usize, GaloisKey> {
+) -> EvaluationKey {
     let mut rng = thread_rng();
-    let mut keys = HashMap::<usize, GaloisKey>::new();
+    let mut evk = EvaluationKeyBuilder::new_leveled(sk, ct_level, ksk_level).unwrap();
     let mut i = 1;
     // left rot by 1
-    keys.insert(
-        1,
-        GaloisKey::new(
-            sk,
-            rot_to_exponent(i as u64, bfv_params),
-            ct_level,
-            ksk_level,
-            &mut rng,
-        )
-        .unwrap(),
-    );
+    assert!(evk.enable_column_rotation(1).is_ok());
     // switch rows
-    keys.insert(
-        bfv_params.degree() * 2 - 1,
-        GaloisKey::new(
-            sk,
-            bfv_params.degree() * 2 - 1,
-            ct_level,
-            ksk_level,
-            &mut rng,
-        )
-        .unwrap(),
-    );
-    keys
+    assert!(evk.enable_row_rotation().is_ok());
+    evk.build(&mut rng).unwrap()
 }
 
 pub fn random_data(mut size_bits: usize) -> Vec<u64> {
