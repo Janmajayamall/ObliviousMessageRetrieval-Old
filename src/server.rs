@@ -1,8 +1,8 @@
 use crate::pvw::{PVWCiphertext, PVWParameters};
 use crate::utils::read_range_coeffs;
 use fhe::bfv::{
-    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, GaloisKey, Multiplicator,
-    Plaintext, RelinearizationKey, SecretKey,
+    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, Multiplicator,
+    Plaintext, RelinearizationKey, SecretKey, EvaluationKey,
 };
 use fhe_math::zq::Modulus;
 use fhe_traits::FheEncoder;
@@ -269,7 +269,7 @@ pub fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &PVWParameters,
     mut ct_pvw_sk: Vec<Ciphertext>,
-    rotation_key: &GaloisKey,
+    rotation_key: &EvaluationKey,
     clues: &[PVWCiphertext],
     sk: &SecretKey,
 ) -> Vec<Ciphertext> {
@@ -298,7 +298,7 @@ pub fn decrypt_pvw(
             sk_a[ell_index] = &sk_a[ell_index] + &product;
 
             // rotate left by 1
-            ct_pvw_sk[ell_index] = rotation_key.relinearize(&ct_pvw_sk[ell_index]).unwrap();
+            ct_pvw_sk[ell_index] = rotation_key.rotates_columns_by(&ct_pvw_sk[ell_index], 1).unwrap();
 
             // unsafe {
             //     dbg!(sk.measure_noise(&sk_a[ell_index]));
@@ -332,32 +332,6 @@ pub fn decrypt_pvw(
     sk_a
 }
 
-/// Computes sum of all slot values
-/// of `ct` such that each slot stores
-/// the final sum.
-/// That is translates from [0,1,2,3] -> [6, 6, 6, 6]
-pub fn inner_sum(
-    bfv_params: &Arc<BfvParameters>,
-    ct: &Ciphertext,
-    rot_keys: &HashMap<usize, GaloisKey>,
-) -> Ciphertext {
-    let mut inner_sum = ct.clone();
-    let mut i = 1;
-    while i < bfv_params.degree() / 2 {
-        let temp = rot_keys.get(&i).unwrap().relinearize(&inner_sum).unwrap();
-        inner_sum = &inner_sum + &temp;
-        i *= 2;
-    }
-    inner_sum = &inner_sum
-        + &rot_keys
-            .get(&(bfv_params.degree() * 2 - 1))
-            .unwrap()
-            .relinearize(&inner_sum)
-            .unwrap();
-
-    inner_sum
-}
-
 /// unpacks pv_ct encrypting {0,1}
 /// in `poly_degree` coefficients
 /// into `poly_degree` ciphertexts
@@ -365,8 +339,8 @@ pub fn inner_sum(
 #[allow(clippy::too_many_arguments)]
 pub fn pv_unpack(
     bfv_params: &Arc<BfvParameters>,
-    rot_keys: &HashMap<usize, GaloisKey>,
-    inner_sum_rot_keys: &HashMap<usize, GaloisKey>,
+    rot_keys: &EvaluationKey,
+    inner_sum_rot_keys: &EvaluationKey,
     pv_ct: &mut Ciphertext,
     expansion_size: usize,
     offset: usize,
@@ -384,16 +358,10 @@ pub fn pv_unpack(
     for i in offset..(expansion_size + offset) {
         if i != 0 {
             if i == (bfv_params.degree() / 2) {
-                // rotate column when offset is halfway
-                *pv_ct = rot_keys
-                    .get(&(bfv_params.degree() * 2 - 1))
-                    .unwrap()
-                    .relinearize(&pv_ct)
-                    .unwrap();
-                *pv_ct = rot_keys.get(&1).unwrap().relinearize(&pv_ct).unwrap();
-            } else {
-                *pv_ct = rot_keys.get(&1).unwrap().relinearize(&pv_ct).unwrap();
+                // rotate rows when offset is halfway
+                *pv_ct = rot_keys.rotates_rows(&pv_ct).unwrap();
             }
+            *pv_ct = rot_keys.rotates_columns_by(&pv_ct, 1).unwrap();
         }
 
         let mut value_vec = &*pv_ct * &select_pt;
@@ -407,7 +375,7 @@ pub fn pv_unpack(
         // unsafe {
         //     dbg!(sk.measure_noise(&value_vec));
         // }
-        value_vec = inner_sum(bfv_params, &value_vec, inner_sum_rot_keys);
+        value_vec = inner_sum_rot_keys.computes_inner_sum(&value_vec).unwrap();
         // unsafe {
         //     dbg!(sk.measure_noise(&value_vec));
         // }
@@ -532,7 +500,7 @@ pub fn phase1(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &PVWParameters,
     ct_pvw_sk: &[Ciphertext],
-    rotation_key: &GaloisKey,
+    rotation_key: &EvaluationKey,
     rlk_keys: &HashMap<usize, RelinearizationKey>,
     clues: &[PVWCiphertext],
     sk: &SecretKey,
@@ -585,8 +553,8 @@ pub fn phase2(
     assigned_buckets: &Vec<Vec<usize>>,
     assigned_weights: &Vec<Vec<u64>>,
     bfv_params: &Arc<BfvParameters>,
-    rot_keys: &HashMap<usize, GaloisKey>,
-    inner_sum_rot_keys: &HashMap<usize, GaloisKey>,
+    rot_keys: &EvaluationKey,
+    inner_sum_rot_keys: &EvaluationKey,
     pertinency_cts: &mut [Ciphertext],
     payloads: &[Vec<u64>],
     batch_size: usize,
@@ -709,6 +677,7 @@ mod tests {
         solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
+    use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
     use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter};
@@ -755,7 +724,8 @@ mod tests {
         println!("Clues generated");
 
         let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
-        let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
+        // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
+        let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
 
         let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
         let rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 10, 9);
@@ -903,8 +873,9 @@ mod tests {
             .collect_vec();
 
         let mut rng = thread_rng();
-        let rot_key =
-            GaloisKey::new(&bfv_sk, rot_to_exponent(1, &bfv_params), 0, 0, &mut rng).unwrap();
+        // let rot_key =
+        //     GaloisKey::new(&bfv_sk, rot_to_exponent(1, &bfv_params), 0, 0, &mut rng).unwrap();
+        let rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
 
         let now = std::time::SystemTime::now();
         let mut res = decrypt_pvw(
@@ -1167,28 +1138,32 @@ mod tests {
         let ct = bfv_sk.try_encrypt(&values_pt, &mut rng).unwrap();
 
         // construct rot keys
-        let mut i = 1;
-        let mut rot_keys = HashMap::<usize, GaloisKey>::new();
-        while i < degree {
-            rot_keys.insert(
-                i,
-                GaloisKey::new(
-                    &bfv_sk,
-                    rot_to_exponent(i as u64, &bfv_params),
-                    0,
-                    0,
-                    &mut rng,
-                )
-                .unwrap(),
-            );
-            i *= 2;
-        }
-        rot_keys.insert(
-            degree * 2 - 1,
-            GaloisKey::new(&bfv_sk, degree * 2 - 1, 0, 0, &mut rng).unwrap(),
-        );
+        // let mut i = 1;
+        // let mut rot_keys = HashMap::<usize, GaloisKey>::new();
+        // while i < degree {
+        //     rot_keys.insert(
+        //         i,
+        //         GaloisKey::new(
+        //             &bfv_sk,
+        //             rot_to_exponent(i as u64, &bfv_params),
+        //             0,
+        //             0,
+        //             &mut rng,
+        //         )
+        //         .unwrap(),
+        //     );
+        //     i *= 2;
+        // }
+        // rot_keys.insert(
+        //     degree * 2 - 1,
+        //     GaloisKey::new(&bfv_sk, degree * 2 - 1, 0, 0, &mut rng).unwrap(),
+        // );
 
-        let ct2 = inner_sum(&bfv_params, &ct, &rot_keys);
+        // let ct2 = inner_sum(&bfv_params, &ct, &rot_keys);
+
+        let evk = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_inner_sum().unwrap().build(&mut rng).unwrap();
+        let ct2 = evk.computes_inner_sum(&ct).unwrap();
+
         let sum_vec =
             Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&ct2).unwrap(), Encoding::simd()).unwrap();
         let sum: u64 = values.iter().sum();

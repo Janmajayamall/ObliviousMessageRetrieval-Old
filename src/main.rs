@@ -1,8 +1,8 @@
 use client::gen_pvw_sk_cts;
 use fhe::bfv::{
-    BfvParametersBuilder, Encoding, GaloisKey, GaloisKeyProto, RelinearizationKeyProto, SecretKey,
+    BfvParametersBuilder, Encoding, SecretKey, EvaluationKeyBuilder,
 };
-use fhe_traits::{FheDecoder, FheDecrypter};
+use fhe_traits::{FheDecoder, FheDecrypter, Serialize};
 use itertools::Itertools;
 use protobuf::{Message, MessageDyn};
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
@@ -128,29 +128,21 @@ fn calculate_detection_key_size() {
 
     let mut size = 0;
     {
-        size += GaloisKeyProto::from(&GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap())
-            .compute_size();
+        let evk = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
+        size += evk.to_bytes().len();
     }
     {
         gen_rlk_keys_levelled(&bfv_params, &bfv_sk)
             .into_values()
             .for_each(|k| {
-                size += RelinearizationKeyProto::from(&k).compute_size();
+                size += k.to_bytes().len();
             });
         // dbg!(gen_rlk_keys_levelled(&bfv_params, &bfv_sk).keys());
     }
     {
-        gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9)
-            .into_values()
-            .for_each(|k| {
-                size += GaloisKeyProto::from(&k).compute_size();
-            });
+        size += gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9).to_bytes().len();
 
-        gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11)
-            .into_values()
-            .for_each(|k| {
-                size += GaloisKeyProto::from(&k).compute_size();
-            });
+        size += gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11).to_bytes().len();
 
         // dbg!(gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9).keys());
         // dbg!(gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11).keys())
@@ -185,7 +177,8 @@ fn run() {
     println!("Generating client keys");
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
-    let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
+    // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
+    let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
     let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk);
     let rot_keys = gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9);
     let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
