@@ -1,11 +1,12 @@
 use client::gen_pvw_sk_cts;
-use fhe::bfv::{
-    BfvParametersBuilder, Encoding, SecretKey, EvaluationKeyBuilder,
-};
+use fhe::bfv::{BfvParametersBuilder, Encoding, EvaluationKeyBuilder, SecretKey};
 use fhe_traits::{FheDecoder, FheDecrypter, Serialize};
 use itertools::Itertools;
+use omr::utils::{deserialize_detection_key, gen_detection_key, serialize_detection_key};
 use protobuf::{Message, MessageDyn};
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+use rand::{Rng, RngCore, SeedableRng};
+use rand_chacha::ChaChaRng;
 use std::io::Write;
 use std::sync::Arc;
 use std::vec;
@@ -16,10 +17,7 @@ mod server;
 mod utils;
 
 use crate::client::{construct_lhs, construct_rhs, pv_decompress};
-use crate::utils::{
-    assign_buckets, gen_rlk_keys, gen_rlk_keys_levelled, gen_rot_keys_inner_product,
-    gen_rot_keys_pv_selector, solve_equations,
-};
+use crate::utils::{assign_buckets, solve_equations};
 use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
 use server::{phase1, phase2};
 
@@ -43,6 +41,7 @@ const MODULI_OMR: &[u64; 15] = &[
 const DEGREE: usize = 1 << 11;
 const MODULI_OMR_PT: &[u64; 1] = &[65537];
 const SET_SIZE: usize = 1 << 14;
+const VARIANCE: usize = 10;
 
 // SRLC params
 const K: usize = 50;
@@ -125,29 +124,9 @@ fn calculate_detection_key_size() {
             .unwrap(),
     );
     let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-
-    let mut size = 0;
-    {
-        let evk = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
-        size += evk.to_bytes().len();
-    }
-    {
-        gen_rlk_keys_levelled(&bfv_params, &bfv_sk)
-            .into_values()
-            .for_each(|k| {
-                size += k.to_bytes().len();
-            });
-        // dbg!(gen_rlk_keys_levelled(&bfv_params, &bfv_sk).keys());
-    }
-    {
-        size += gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9).to_bytes().len();
-
-        size += gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11).to_bytes().len();
-
-        // dbg!(gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9).keys());
-        // dbg!(gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11).keys())
-    };
-    println!("Detection key size: {}MB", size as f64 / 1000000.0)
+    let key = gen_detection_key(&bfv_params, &bfv_sk, &mut rng);
+    let s = serialize_detection_key(&key);
+    println!("Detection key size: {}MB", s.len() as f64 / 1000000.0)
 }
 
 fn run() {
@@ -160,6 +139,7 @@ fn run() {
             .build()
             .unwrap(),
     );
+    let pt_bits = (64 - bfv_params.plaintext().leading_zeros() - 1) as usize;
     let pvw_params = PVWParameters {
         n: 450,
         m: 100,
@@ -178,10 +158,17 @@ fn run() {
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
     // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
-    let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
-    let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk);
-    let rot_keys = gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9);
-    let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
+    // let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
+    //     .unwrap()
+    //     .enable_column_rotation(1)
+    //     .unwrap()
+    //     .build(&mut rng)
+    //     .unwrap();
+    // let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk, &mut rng);
+    // let rot_keys = gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9, &mut rng);
+    // let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11, &mut rng);
+    let d_key = gen_detection_key(&bfv_params, &bfv_sk, &mut rng);
+    let d_key_serialized = serialize_detection_key(&d_key);
 
     // Generate sample data //
     gen_data(SET_SIZE, &pvw_params, &pvw_pk);
@@ -222,15 +209,22 @@ fn run() {
         });
 
     // SERVER SIDE //
-    let (assigned_buckets, assigned_weights) = assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE);
+    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
+    thread_rng().fill(&mut seed);
+    let mut rng = ChaChaRng::from_seed(seed);
+
+    let d_key = deserialize_detection_key(&bfv_params, &d_key_serialized);
+
+    let (assigned_buckets, assigned_weights) =
+        assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
     println!("Server: Running phase1");
     let now = std::time::Instant::now();
     let mut pertinency_cts = phase1(
         &bfv_params,
         &pvw_params,
         &ct_pvw_sk,
-        &top_rot_key,
-        &rlk_keys,
+        &d_key.ek1,
+        &d_key.rlk_keys,
         &clues,
         &bfv_sk,
         SET_SIZE,
@@ -242,8 +236,8 @@ fn run() {
         &assigned_buckets,
         &assigned_weights,
         &bfv_params,
-        &rot_keys,
-        &inner_sum_rot_keys,
+        &d_key.ek2,
+        &d_key.ek3,
         &mut pertinency_cts,
         &payloads,
         32,
@@ -263,13 +257,13 @@ fn run() {
     // CLIENT SIDE //
     println!("Client: Processing digest");
     let now = std::time::Instant::now();
-    let pv = pv_decompress(&bfv_params, &compressed_pv, &bfv_sk);
-    {
-        // Checking ct encoding pv is correct (i.e. Phase 1)
-        let decompressed_pv = pv_decompress(&bfv_params, &compressed_pv, &bfv_sk);
 
+    let pt = bfv_sk.try_decrypt(&compressed_pv).unwrap();
+    let pv_values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+    let pv = pv_decompress(&pv_values, pt_bits);
+    {
         let mut res_indices = vec![];
-        decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
+        pv.iter().enumerate().for_each(|(index, bit)| {
             if *bit == 1 {
                 res_indices.push(index);
             }

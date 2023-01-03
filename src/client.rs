@@ -36,18 +36,11 @@ pub fn gen_pvw_sk_cts(
         .collect_vec()
 }
 
-pub fn pv_decompress(
-    bfv_params: &Arc<BfvParameters>,
-    pv_ct: &Ciphertext,
-    sk: &SecretKey,
-) -> Vec<u64> {
-    let pt = sk.try_decrypt(pv_ct).unwrap();
-    let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
-
-    let coeff_size = 64 - bfv_params.plaintext().leading_zeros() - 1;
+pub fn pv_decompress(values: &[u64], pt_bits: usize) -> Vec<u64> {
     let mut pv = vec![];
-    values.into_iter().for_each(|mut v| {
-        for _ in 0..coeff_size {
+    values.iter().for_each(|v| {
+        let mut v = *v;
+        for _ in 0..pt_bits {
             pv.push(v & 1);
             v >>= 1;
         }
@@ -101,13 +94,13 @@ mod tests {
 
     #[test]
     fn test_assign_buckets() {
-        let rng = thread_rng();
+        let mut rng = thread_rng();
         let k = 50;
         let m = k * 2;
         let gamma = 5;
         let q_mod = 65537;
 
-        let (buckets, weights) = assign_buckets(m, gamma, q_mod, k);
+        let (buckets, weights) = assign_buckets(m, gamma, q_mod, k, &mut rng);
 
         // let's generate k random values
         let values = rng

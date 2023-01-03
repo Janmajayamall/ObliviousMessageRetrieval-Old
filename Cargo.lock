@@ -3,25 +3,6 @@
 version = 3
 
 [[package]]
-name = "OMR"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "byteorder",
- "fhe",
- "fhe-math",
- "fhe-traits",
- "fhe-util",
- "itertools",
- "ndarray",
- "protobuf",
- "rand",
- "rayon",
- "serde",
- "statrs",
-]
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,6 +408,26 @@ checksum = "0fac9e2da13b5eb447a6ce3d392f23a29d8694bff781bf03a16cd9ac8697593b"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "omr"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "byteorder",
+ "fhe",
+ "fhe-math",
+ "fhe-traits",
+ "fhe-util",
+ "itertools",
+ "ndarray",
+ "protobuf",
+ "rand",
+ "rand_chacha",
+ "rayon",
+ "serde",
+ "statrs",
 ]
 
 [[package]]

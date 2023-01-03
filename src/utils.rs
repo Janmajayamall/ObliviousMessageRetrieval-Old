@@ -1,18 +1,22 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use fhe::bfv::{BfvParameters, RelinearizationKey, SecretKey, EvaluationKey, EvaluationKeyBuilder};
+use fhe::bfv::{BfvParameters, EvaluationKey, EvaluationKeyBuilder, RelinearizationKey, SecretKey};
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
     zq::Modulus,
 };
+use fhe_traits::{Deserialize, DeserializeParametrized, Serialize};
 use itertools::Itertools;
-use rand::{distributions::Uniform, prelude::Distribution};
+use rand::{distributions::Uniform, prelude::Distribution, CryptoRng, RngCore};
 use rand::{thread_rng, Rng};
 use std::io::Write;
 use std::sync::Arc;
 use std::vec;
 use std::{collections::HashMap, fs::File};
 
-use crate::pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
+use crate::{
+    pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey},
+    server::DetectionKey,
+};
 
 pub fn read_range_coeffs(path: &str) -> Vec<u64> {
     let mut file = File::open(path).unwrap();
@@ -65,14 +69,13 @@ pub fn rot_to_exponent(rot_by: u64, bfv_params: &Arc<BfvParameters>) -> usize {
     let q = Modulus::new(2 * bfv_params.degree() as u64).unwrap();
     q.pow(3, rot_by) as usize
 }
-pub fn assign_buckets(
+pub fn assign_buckets<R: CryptoRng + RngCore>(
     no_of_buckets: usize,
     gamma: usize,
     q_mod: u64,
     set_size: usize,
+    rng: &mut R,
 ) -> (Vec<Vec<usize>>, Vec<Vec<u64>>) {
-    let mut rng = thread_rng();
-
     let mut buckets = vec![vec![]; set_size];
     let mut weights = vec![vec![]; set_size];
 
@@ -313,50 +316,118 @@ pub fn gen_rlk_keys(
     keys
 }
 
-pub fn gen_rlk_keys_levelled(
+pub fn gen_rlk_keys_levelled<R: CryptoRng + RngCore>(
     bfv_params: &Arc<BfvParameters>,
     sk: &SecretKey,
+    rng: &mut R,
 ) -> HashMap<usize, RelinearizationKey> {
-    let mut rng = thread_rng();
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
-
     // for powers of x; range fn;
     for i in 1..11 {
         keys.insert(
             i,
-            RelinearizationKey::new_leveled(sk, i, i - 1, &mut rng).unwrap(),
+            RelinearizationKey::new_leveled(sk, i, i - 1, rng).unwrap(),
         );
     }
-
     keys
 }
 
-pub fn gen_rot_keys_inner_product(
+pub fn gen_rot_keys_inner_product<R: CryptoRng + RngCore>(
     bfv_params: &Arc<BfvParameters>,
     sk: &SecretKey,
     ct_level: usize,
     ksk_level: usize,
+    rng: &mut R,
 ) -> EvaluationKey {
-    let mut rng = thread_rng();
     let mut evk = EvaluationKeyBuilder::new_leveled(sk, ct_level, ksk_level).unwrap();
     assert!(evk.enable_inner_sum().is_ok());
-    evk.build(&mut rng).unwrap()
+    evk.build(rng).unwrap()
 }
 
-pub fn gen_rot_keys_pv_selector(
+pub fn gen_rot_keys_pv_selector<R: CryptoRng + RngCore>(
     bfv_params: &Arc<BfvParameters>,
     sk: &SecretKey,
     ct_level: usize,
     ksk_level: usize,
+    rng: &mut R,
 ) -> EvaluationKey {
-    let mut rng = thread_rng();
     let mut evk = EvaluationKeyBuilder::new_leveled(sk, ct_level, ksk_level).unwrap();
-    let mut i = 1;
     // left rot by 1
     assert!(evk.enable_column_rotation(1).is_ok());
     // switch rows
     assert!(evk.enable_row_rotation().is_ok());
-    evk.build(&mut rng).unwrap()
+    evk.build(rng).unwrap()
+}
+
+pub fn gen_detection_key<R: CryptoRng + RngCore>(
+    bfv_params: &Arc<BfvParameters>,
+    sk: &SecretKey,
+    rng: &mut R,
+) -> DetectionKey {
+    let ek1 = EvaluationKeyBuilder::new_leveled(sk, 0, 0)
+        .unwrap()
+        .enable_column_rotation(1)
+        .unwrap()
+        .build(rng)
+        .unwrap();
+    let rlk_keys = gen_rlk_keys_levelled(bfv_params, sk, rng);
+    let ek2 = gen_rot_keys_pv_selector(bfv_params, sk, 10, 9, rng);
+    let ek3 = gen_rot_keys_inner_product(bfv_params, sk, 12, 11, rng);
+
+    DetectionKey {
+        ek1,
+        ek2,
+        ek3,
+        rlk_keys,
+    }
+}
+
+pub fn serialize_detection_key(key: &DetectionKey) -> Vec<u8> {
+    let mut s = vec![];
+
+    s.extend_from_slice(key.ek1.to_bytes().as_slice());
+    s.extend_from_slice(key.ek2.to_bytes().as_slice());
+    s.extend_from_slice(key.ek3.to_bytes().as_slice());
+
+    (1..11).into_iter().for_each(|i| {
+        s.extend_from_slice(key.rlk_keys.get(&i).unwrap().to_bytes().as_slice());
+    });
+
+    s
+}
+
+pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> DetectionKey {
+    // debug_assert!(bytes.len() == )
+    let ek1 = EvaluationKey::from_bytes(&bytes[..3030031], bfv_params).unwrap();
+    let ek2 = EvaluationKey::from_bytes(&bytes[3030031..3816202], bfv_params).unwrap();
+    let ek3 = EvaluationKey::from_bytes(&bytes[3816202..5397013], bfv_params).unwrap();
+
+    let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
+    macro_rules! rlk {
+        ($i: literal, $r: expr) => {
+            rlk_keys.insert(
+                $i,
+                RelinearizationKey::from_bytes(&bytes[$r], bfv_params).unwrap(),
+            );
+        };
+    }
+    rlk!(1, 5397013..8225040);
+    rlk!(2, 8225040..10651390);
+    rlk!(3, 10651390..12798941);
+    rlk!(4, 12798941..14677420);
+    rlk!(5, 14677420..16231532);
+    rlk!(6, 16231532..17491997);
+    rlk!(7, 17491997..18489535);
+    rlk!(8, 18489535..19254866);
+    rlk!(9, 19254866..19818710);
+    rlk!(10, 19818710..);
+
+    DetectionKey {
+        ek1,
+        ek2,
+        ek3,
+        rlk_keys,
+    }
 }
 
 pub fn random_data(mut size_bits: usize) -> Vec<u64> {
@@ -421,7 +492,10 @@ pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, VARIANCE};
+
     use super::*;
+    use fhe::bfv::BfvParametersBuilder;
     use itertools::Itertools;
     use rand::{distributions::Uniform, thread_rng};
 
@@ -432,13 +506,13 @@ mod tests {
 
     #[test]
     fn test_assign_buckets() {
-        let rng = thread_rng();
+        let mut rng = thread_rng();
         let k = 50;
         let m = 100;
         let gamma = 5;
         let q_mod = 65537;
 
-        let (buckets, weights) = assign_buckets(m, gamma, q_mod, k);
+        let (buckets, weights) = assign_buckets(m, gamma, q_mod, k, &mut rng);
 
         // let's generate k random values
         let values = rng
@@ -471,5 +545,76 @@ mod tests {
             .map(|v| v[0])
             .collect_vec();
         assert_eq!(sols, values);
+    }
+
+    #[test]
+    fn detection_key_serialize_deserialize() {
+        let par = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_moduli(MODULI_OMR)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_variance(VARIANCE)
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&par, &mut rng);
+
+        let key = gen_detection_key(&par, &sk, &mut rng);
+        let s = serialize_detection_key(&key);
+        let key1 = deserialize_detection_key(&par, &s);
+
+        assert_eq!(key, key1);
+    }
+
+    #[test]
+    fn display_key_sizes() {
+        pub fn serialize_detection_key(key: DetectionKey) {
+            let mut s = vec![];
+            let mut r = vec![];
+
+            s.extend_from_slice(key.ek1.to_bytes().as_slice());
+            r.push(s.len());
+            s.extend_from_slice(key.ek2.to_bytes().as_slice());
+            r.push(s.len());
+            s.extend_from_slice(key.ek3.to_bytes().as_slice());
+            r.push(s.len());
+
+            (1..11).into_iter().for_each(|i| {
+                s.extend_from_slice(key.rlk_keys.get(&i).unwrap().to_bytes().as_slice());
+                r.push(s.len());
+            });
+
+            dbg!(r);
+        }
+
+        let par = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_moduli(MODULI_OMR)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_variance(VARIANCE)
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&par, &mut rng);
+
+        let key = gen_detection_key(&par, &sk, &mut rng);
+        serialize_detection_key(key);
+    }
+
+    #[test]
+    fn print_rlk_macro() {
+        let r = vec![
+            3030031, 3816202, 5397013, 8225040, 10651390, 12798941, 14677420, 16231532, 17491997,
+            18489535, 19254866, 19818710, 20211787,
+        ];
+        for i in (3..r.len()) {
+            println!("rlk!({}, {}..{});", i - 2, r[i - 1], r[i]);
+        }
     }
 }

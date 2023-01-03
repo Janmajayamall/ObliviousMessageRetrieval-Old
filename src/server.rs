@@ -1,8 +1,9 @@
 use crate::pvw::{PVWCiphertext, PVWParameters};
-use crate::utils::read_range_coeffs;
+use crate::utils::{gen_rlk_keys, read_range_coeffs};
+use bincode::config::RejectTrailing;
 use fhe::bfv::{
-    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, Multiplicator,
-    Plaintext, RelinearizationKey, SecretKey, EvaluationKey,
+    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Multiplicator,
+    Plaintext, RelinearizationKey, SecretKey,
 };
 use fhe_math::zq::Modulus;
 use fhe_traits::FheEncoder;
@@ -11,6 +12,14 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
+
+#[derive(PartialEq, Debug)]
+pub struct DetectionKey {
+    pub ek1: EvaluationKey,
+    pub ek2: EvaluationKey,
+    pub ek3: EvaluationKey,
+    pub rlk_keys: HashMap<usize, RelinearizationKey>,
+}
 
 pub fn mul_many(
     values: &mut Vec<Ciphertext>,
@@ -298,7 +307,9 @@ pub fn decrypt_pvw(
             sk_a[ell_index] = &sk_a[ell_index] + &product;
 
             // rotate left by 1
-            ct_pvw_sk[ell_index] = rotation_key.rotates_columns_by(&ct_pvw_sk[ell_index], 1).unwrap();
+            ct_pvw_sk[ell_index] = rotation_key
+                .rotates_columns_by(&ct_pvw_sk[ell_index], 1)
+                .unwrap();
 
             // unsafe {
             //     dbg!(sk.measure_noise(&sk_a[ell_index]));
@@ -672,7 +683,7 @@ mod tests {
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
     use crate::pvw::PVWSecretKey;
     use crate::utils::{
-        assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys,
+        assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys_levelled,
         gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, rot_to_exponent,
         solve_equations,
     };
@@ -725,14 +736,20 @@ mod tests {
 
         let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
         // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
-        let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
+        let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
+            .unwrap()
+            .enable_column_rotation(1)
+            .unwrap()
+            .build(&mut rng)
+            .unwrap();
 
-        let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
-        let rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 10, 9);
-        let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11);
+        let mut rng = thread_rng();
+        let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk, &mut rng);
+        let rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 10, 9, &mut rng);
+        let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11, &mut rng);
 
         let (assigned_buckets, assigned_weights) =
-            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size);
+            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size, &mut rng);
 
         println!("Phase 1 starting...");
         let now = std::time::Instant::now();
@@ -792,7 +809,12 @@ mod tests {
         //     // assert!(false);
         // }
 
-        let decompressed_pv = pv_decompress(&bfv_params, &res_pv, &bfv_sk);
+        let pt = bfv_sk.try_decrypt(&res_pv).unwrap();
+        let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+        let decompressed_pv = pv_decompress(
+            &values,
+            (64 - bfv_params.plaintext().leading_zeros() - 1) as usize,
+        );
         let lhs = construct_lhs(
             &decompressed_pv,
             assigned_buckets,
@@ -875,7 +897,12 @@ mod tests {
         let mut rng = thread_rng();
         // let rot_key =
         //     GaloisKey::new(&bfv_sk, rot_to_exponent(1, &bfv_params), 0, 0, &mut rng).unwrap();
-        let rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_column_rotation(1).unwrap().build(&mut rng).unwrap();
+        let rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
+            .unwrap()
+            .enable_column_rotation(1)
+            .unwrap()
+            .build(&mut rng)
+            .unwrap();
 
         let now = std::time::SystemTime::now();
         let mut res = decrypt_pvw(
@@ -1061,9 +1088,10 @@ mod tests {
 
         // rotation keys
         let ct_level = 1;
-        let mut rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, ct_level, ct_level - 1);
+        let mut rot_keys =
+            gen_rot_keys_inner_product(&bfv_params, &bfv_sk, ct_level, ct_level - 1, &mut rng);
         let mut inner_sum_rot_keys =
-            gen_rot_keys_inner_product(&bfv_params, &bfv_sk, ct_level + 2, ct_level + 1);
+            gen_rot_keys_inner_product(&bfv_params, &bfv_sk, ct_level + 2, ct_level + 1, &mut rng);
         let mut i = 1;
 
         let batch_size = 32;
@@ -1161,7 +1189,12 @@ mod tests {
 
         // let ct2 = inner_sum(&bfv_params, &ct, &rot_keys);
 
-        let evk = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0).unwrap().enable_inner_sum().unwrap().build(&mut rng).unwrap();
+        let evk = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
+            .unwrap()
+            .enable_inner_sum()
+            .unwrap()
+            .build(&mut rng)
+            .unwrap();
         let ct2 = evk.computes_inner_sum(&ct).unwrap();
 
         let sum_vec =

@@ -1,5 +1,5 @@
 [package]
-name = "OMR"
+name = "omr"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,6 +11,7 @@ fhe-util = "0.1.0-beta.4"
 fhe-traits = "0.1.0-beta.4"
 fhe-math = "0.1.0-beta.4"
 rand = "0.8.5"
+rand_chacha = "0.3.1"
 itertools = "0.10.5"
 byteorder = "1.4.3"
 rayon = "1.6.0"
