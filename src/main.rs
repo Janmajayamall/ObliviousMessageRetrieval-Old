@@ -56,7 +56,11 @@ const GAMMA: usize = 5;
 // rows of buckets; = CEIL((M * M_ROW_SPACE) / DEGREE)
 const CT_SPAN_COUNT: usize = 7;
 
-pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey) {
+pub fn gen_data(
+    set_size: usize,
+    pvw_params: &Arc<PVWParameters>,
+    pvw_pk: &PublicKey,
+) -> (Vec<PVWCiphertext>, Vec<Vec<u8>>) {
     println!("Generating clues and messages...");
 
     assert!(set_size > 50);
@@ -89,28 +93,32 @@ pub fn gen_data(set_size: usize, pvw_params: &PVWParameters, pvw_pk: &PublicKey)
     //     let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
     //     tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
     // };
-    (0..set_size).for_each(|index| {
-        let clue = if pertinent_indices.contains(&index) {
-            pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
-        } else {
-            let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
-            tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
-        };
-        let payload = payload_distr
-            .sample_iter(rng.clone())
-            .take(256)
-            .collect_vec();
+    let data: (Vec<PVWCiphertext>, Vec<Vec<u8>>) = (0..set_size)
+        .map(|index| {
+            let clue = if pertinent_indices.contains(&index) {
+                pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
+            } else {
+                let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+                tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+            };
+            let payload = payload_distr
+                .sample_iter(rng.clone())
+                .take(256)
+                .collect_vec();
+            (clue, payload)
 
-        let clue_buff = bincode::serialize(&clue).unwrap();
-        std::fs::File::create(format!("target/omr/clue-{index}.bin"))
-            .unwrap()
-            .write_all(&clue_buff)
-            .unwrap();
-        std::fs::File::create(format!("target/omr/payload-{index}.bin"))
-            .unwrap()
-            .write_all(&payload)
-            .unwrap();
-    });
+            // let clue_buff = bincode::serialize(&clue).unwrap();
+            // std::fs::File::create(format!("target/omr/clue-{index}.bin"))
+            //     .unwrap()
+            //     .write_all(&clue_buff)
+            //     .unwrap();
+            // std::fs::File::create(format!("target/omr/payload-{index}.bin"))
+            //     .unwrap()
+            //     .write_all(&payload)
+            //     .unwrap();
+        })
+        .unzip();
+    data
 }
 
 fn calculate_detection_key_size() {
@@ -140,13 +148,7 @@ fn run() {
             .unwrap(),
     );
     let pt_bits = (64 - bfv_params.plaintext().leading_zeros() - 1) as usize;
-    let pvw_params = PVWParameters {
-        n: 450,
-        m: 100,
-        ell: 4,
-        variance: 1.3,
-        q: 65537,
-    };
+    let pvw_params = Arc::new(PVWParameters::default());
 
     // CLIENT SETUP //
     let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
@@ -157,21 +159,11 @@ fn run() {
     println!("Generating client keys");
     let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
 
-    // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
-    // let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
-    //     .unwrap()
-    //     .enable_column_rotation(1)
-    //     .unwrap()
-    //     .build(&mut rng)
-    //     .unwrap();
-    // let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk, &mut rng);
-    // let rot_keys = gen_rot_keys_pv_selector(&bfv_params, &bfv_sk, 10, 9, &mut rng);
-    // let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11, &mut rng);
     let d_key = gen_detection_key(&bfv_params, &bfv_sk, &mut rng);
     let d_key_serialized = serialize_detection_key(&d_key);
 
     // Generate sample data //
-    gen_data(SET_SIZE, &pvw_params, &pvw_pk);
+    let data = gen_data(SET_SIZE, &pvw_params, &pvw_pk);
 
     let mut pertinent_indices: Vec<usize> = bincode::deserialize(
         &std::fs::read("target/omr/pertinent-indices.bin")
@@ -180,25 +172,34 @@ fn run() {
     .unwrap();
     println!("Pertinent indices: {pertinent_indices:?}");
 
-    let data: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..SET_SIZE)
-        .map(|index| {
-            let clue: PVWCiphertext = bincode::deserialize(
-                &std::fs::read(format!("target/omr/clue-{index}.bin")).expect("Clue file missing!"),
-            )
-            .expect("Invalid clue file!");
-            // change payload from bytes to collection of two bytes
-            let payload: Vec<u64> = std::fs::read(format!("target/omr/payload-{index}.bin"))
-                .expect("Payload file missing!")
-                .chunks(2)
-                .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
-                .collect();
-            assert!(payload.len() == 128);
+    // let data: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..SET_SIZE)
+    //     .map(|index| {
+    //         let clue: PVWCiphertext = bincode::deserialize(
+    //             &std::fs::read(format!("target/omr/clue-{index}.bin")).expect("Clue file missing!"),
+    //         )
+    //         .expect("Invalid clue file!");
+    //         // change payload from bytes to collection of two bytes
+    //         let payload: Vec<u64> = std::fs::read(format!("target/omr/payload-{index}.bin"))
+    //             .expect("Payload file missing!")
+    //             .chunks(2)
+    //             .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
+    //             .collect();
+    //         assert!(payload.len() == 128);
 
-            (clue, payload)
-        })
-        .unzip();
+    //         (clue, payload)
+    //     })
+    //     .unzip();
     let clues = data.0;
     let payloads = data.1;
+    let payloads = payloads
+        .iter()
+        .map(|pl| {
+            pl.chunks(2)
+                .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
+                .collect()
+        })
+        .collect::<Vec<Vec<u64>>>();
+
     let mut pertinent_payloads = vec![];
     (0..SET_SIZE)
         .zip(payloads.iter())
