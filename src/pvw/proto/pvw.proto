@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+message PvwCiphertext { 
+    bytes a = 1;
+    bytes b = 2;
+}
+
+message PvwPublicKey { 
+    bytes a = 1
+    bytes b = 1
+}

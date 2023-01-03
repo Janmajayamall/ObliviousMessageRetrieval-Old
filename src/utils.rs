@@ -8,10 +8,10 @@ use fhe_traits::{Deserialize, DeserializeParametrized, Serialize};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, CryptoRng, RngCore};
 use rand::{thread_rng, Rng};
-use std::io::Write;
 use std::sync::Arc;
 use std::vec;
 use std::{collections::HashMap, fs::File};
+use std::{io::Write, thread::current};
 
 use crate::{
     pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey},
@@ -490,6 +490,58 @@ pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
         .collect()
 }
 
+pub fn transcode_to_bytes(vals: &[u64], n_bits: usize) -> Vec<u8> {
+    let mask = u128::MAX >> (64 - n_bits);
+    let mut current_n_bits = 0;
+    let mut buffer = 0;
+    let mut current_index = 0;
+    let mut bytes = vec![];
+    while current_index < vals.len() {
+        while current_n_bits < 8 {
+            buffer |= ((vals[current_index] as u128) & mask) << current_n_bits;
+            current_n_bits += n_bits;
+            current_index += 1;
+        }
+
+        while current_n_bits >= 8 {
+            bytes.push(buffer as u8);
+            buffer >>= 8;
+            current_n_bits -= 8;
+        }
+    }
+    if current_n_bits != 0 {
+        bytes.push(buffer as u8);
+    }
+
+    bytes
+}
+
+pub fn transcode_from_bytes(bytes: Vec<u8>, n_bits: usize) -> Vec<u64> {
+    let mut buffer = 0;
+    let mut current_index = 0;
+    let mut current_n_bits = 0;
+    let mut out = vec![];
+    let mask = (u64::MAX >> (64 - n_bits)) as u128;
+    while current_index < bytes.len() {
+        while current_n_bits < n_bits {
+            buffer |= ((bytes[current_index] as u128) << current_n_bits);
+            current_n_bits += 8;
+            current_index += 1;
+        }
+
+        while current_n_bits >= n_bits {
+            out.push((buffer & mask) as u64);
+            buffer >>= n_bits;
+            current_n_bits -= n_bits;
+        }
+    }
+
+    if current_n_bits != 0 {
+        out.push(buffer as u64);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, VARIANCE};
@@ -616,5 +668,18 @@ mod tests {
         for i in (3..r.len()) {
             println!("rlk!({}, {}..{});", i - 2, r[i - 1], r[i]);
         }
+    }
+
+    #[test]
+    fn transcode_bytes() {
+        let rng = thread_rng();
+        let p = 65537u64;
+        let mut vals = rng.sample_iter(Uniform::new(0, p)).take(10).collect_vec();
+        vals[0] = 65536;
+        let n_bits = 64 - p.leading_zeros() - 1;
+        let bytes = transcode_to_bytes(&vals, n_bits as usize);
+        dbg!(bytes.len());
+        let v = transcode_from_bytes(bytes, n_bits as usize);
+        dbg!(vals, v, n_bits);
     }
 }
