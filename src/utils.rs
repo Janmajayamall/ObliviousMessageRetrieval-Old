@@ -14,7 +14,7 @@ use std::vec;
 use std::{collections::HashMap, fs::File};
 
 use crate::{
-    pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey},
+    pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
     server::DetectionKey,
 };
 
@@ -455,14 +455,14 @@ pub fn gen_pertinent_indices(size: usize, set_size: usize) -> Vec<usize> {
 }
 
 pub fn gen_clues(
-    pvw_params: &Arc<PVWParameters>,
-    pvw_pk: &PublicKey,
+    pvw_params: &Arc<PvwParameters>,
+    pvw_pk: &PvwPublicKey,
     pertinent_indices: &[usize],
     set_size: usize,
-) -> Vec<PVWCiphertext> {
+) -> Vec<PvwCiphertext> {
     let mut rng = thread_rng();
 
-    let tmp_sk = PVWSecretKey::random(pvw_params, &mut rng);
+    let tmp_sk = PvwSecretKey::random(pvw_params, &mut rng);
     let other = tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng);
 
     (0..set_size)

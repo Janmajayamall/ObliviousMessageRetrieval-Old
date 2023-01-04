@@ -12,10 +12,13 @@ use rand::{
 use serde::{Deserialize, Serialize};
 use statrs::distribution::Normal;
 mod proto;
-use proto::pvw::PvwCiphertext as PvwCiphertextProto;
+use proto::pvw::{
+    PvwCiphertext as PvwCiphertextProto, PvwPublicKey as PvwPublicKeyProto,
+    PvwSecretKey as PvwSecretKeyProto,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PVWParameters {
+pub struct PvwParameters {
     pub n: usize,
     pub m: usize,
     pub ell: usize,
@@ -23,10 +26,10 @@ pub struct PVWParameters {
     pub q: u64,
 }
 
-impl Default for PVWParameters {
+impl Default for PvwParameters {
     fn default() -> Self {
         Self {
-            n: 450,
+            n: 5,
             m: 16000,
             ell: 4,
             variance: 1.3,
@@ -36,19 +39,19 @@ impl Default for PVWParameters {
 }
 
 #[derive(Clone)]
-pub struct PVWCiphertext {
-    par: Arc<PVWParameters>,
+pub struct PvwCiphertext {
+    par: Arc<PvwParameters>,
     pub a: Vec<u64>,
     pub b: Vec<u64>,
 }
 
-impl PVWCiphertext {
+impl PvwCiphertext {
     fn to_bytes(&self) -> Vec<u8> {
         let proto = PvwCiphertextProto::from(self);
         proto.write_to_bytes().unwrap()
     }
 
-    fn from_bytes(bytes: &[u8], par: &Arc<PVWParameters>) -> Option<PVWCiphertext> {
+    fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> Option<PvwCiphertext> {
         let from = PvwCiphertextProto::parse_from_bytes(bytes).unwrap();
         let p_bits = (64 - (par.q - 1).leading_zeros()) as usize;
         let mut a = transcode_from_bytes(&from.a, p_bits);
@@ -56,7 +59,7 @@ impl PVWCiphertext {
         a.truncate(par.n);
         b.truncate(par.ell);
 
-        Some(PVWCiphertext {
+        Some(PvwCiphertext {
             par: par.clone(),
             a,
             b,
@@ -64,8 +67,8 @@ impl PVWCiphertext {
     }
 }
 
-impl From<&PVWCiphertext> for PvwCiphertextProto {
-    fn from(value: &PVWCiphertext) -> Self {
+impl From<&PvwCiphertext> for PvwCiphertextProto {
+    fn from(value: &PvwCiphertext) -> Self {
         let mut proto = PvwCiphertextProto::new();
         let p_bits = (64 - (value.par.q - 1).leading_zeros()) as usize;
         proto.a = transcode_to_bytes(&value.a, p_bits);
@@ -74,14 +77,14 @@ impl From<&PVWCiphertext> for PvwCiphertextProto {
     }
 }
 
-pub struct PublicKey {
+pub struct PvwPublicKey {
     a: Array2<u64>,
     b: Array2<u64>,
-    par: Arc<PVWParameters>,
+    par: Arc<PvwParameters>,
 }
 
-impl PublicKey {
-    pub fn encrypt<R: RngCore + CryptoRng>(&self, m: &[u64], rng: &mut R) -> PVWCiphertext {
+impl PvwPublicKey {
+    pub fn encrypt<R: RngCore + CryptoRng>(&self, m: &[u64], rng: &mut R) -> PvwCiphertext {
         debug_assert!(m.len() == self.par.ell);
 
         let error = Uniform::new(0u64, 2)
@@ -118,24 +121,69 @@ impl PublicKey {
                 .collect(),
         );
 
-        PVWCiphertext {
+        PvwCiphertext {
             par: self.par.clone(),
             a: ae.to_vec(),
             b: be.to_vec(),
         }
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let proto = PvwPublicKeyProto::from(self);
+        proto.write_to_bytes().unwrap()
+    }
+
+    pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> PvwPublicKey {
+        let from = PvwPublicKeyProto::parse_from_bytes(bytes).unwrap();
+        let p_bits = 64 - (par.q - 1).leading_zeros() as usize;
+        let mut a = transcode_from_bytes(&from.a, p_bits);
+        let mut b = transcode_from_bytes(&from.b, p_bits);
+        a.truncate(par.n * par.m);
+        b.truncate(par.ell * par.m);
+        PvwPublicKey {
+            a: Array::from_shape_vec((par.n, par.m), a).unwrap(),
+            b: Array::from_shape_vec((par.ell, par.m), b).unwrap(),
+            par: par.clone(),
+        }
+    }
 }
 
-pub struct PVWSecretKey {
+impl From<&PvwPublicKey> for PvwPublicKeyProto {
+    fn from(value: &PvwPublicKey) -> Self {
+        let mut proto = PvwPublicKeyProto::new();
+        let p_bits = 64 - (value.par.q - 1).leading_zeros() as usize;
+        proto.a = transcode_to_bytes(
+            value
+                .a
+                .outer_iter()
+                .flat_map(|n_m| n_m.to_vec())
+                .collect_vec()
+                .as_slice(),
+            p_bits,
+        );
+        proto.b = transcode_to_bytes(
+            value
+                .b
+                .outer_iter()
+                .flat_map(|ell_m| ell_m.to_vec())
+                .collect_vec()
+                .as_slice(),
+            p_bits,
+        );
+        proto
+    }
+}
+
+pub struct PvwSecretKey {
     pub key: Array2<u64>,
-    pub par: Arc<PVWParameters>,
+    pub par: Arc<PvwParameters>,
 }
 
-impl PVWSecretKey {
+impl PvwSecretKey {
     pub fn random<R: RngCore + CryptoRng>(
-        params: &Arc<PVWParameters>,
+        params: &Arc<PvwParameters>,
         rng: &mut R,
-    ) -> PVWSecretKey {
+    ) -> PvwSecretKey {
         let q = Modulus::new(params.q).unwrap();
 
         let sk = Array::from_shape_vec(
@@ -144,13 +192,13 @@ impl PVWSecretKey {
         )
         .unwrap();
 
-        PVWSecretKey {
+        PvwSecretKey {
             key: sk,
             par: params.clone(),
         }
     }
 
-    pub fn public_key<R: RngCore + CryptoRng>(&self, rng: &mut R) -> PublicKey {
+    pub fn public_key<R: RngCore + CryptoRng>(&self, rng: &mut R) -> PvwPublicKey {
         let q = Modulus::new(self.par.q).unwrap();
 
         let a = Array::from_shape_vec(
@@ -190,14 +238,14 @@ impl PVWSecretKey {
         q.reduce_vec(&mut ska);
         let ska = Array::from_shape_vec((self.par.ell, self.par.m), ska).unwrap();
 
-        PublicKey {
+        PvwPublicKey {
             a,
             b: ska,
             par: self.par.clone(),
         }
     }
 
-    pub fn decrypt(&self, ct: PVWCiphertext) -> Vec<u64> {
+    pub fn decrypt(&self, ct: PvwCiphertext) -> Vec<u64> {
         let q = Modulus::new(self.par.q).unwrap();
 
         izip!(ct.b.iter(), self.key.outer_iter())
@@ -210,7 +258,7 @@ impl PVWSecretKey {
             .collect()
     }
 
-    pub fn decrypt_shifted(&self, ct: PVWCiphertext) -> Vec<u64> {
+    pub fn decrypt_shifted(&self, ct: PvwCiphertext) -> Vec<u64> {
         let q = Modulus::new(self.par.q).unwrap();
 
         izip!(ct.b.iter(), self.key.outer_iter())
@@ -231,20 +279,55 @@ impl PVWSecretKey {
             })
             .collect()
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let proto = PvwSecretKeyProto::from(self);
+        proto.write_to_bytes().unwrap()
+    }
+
+    pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> PvwSecretKey {
+        let from = PvwSecretKeyProto::parse_from_bytes(bytes).unwrap();
+        let p_bits = 64 - (par.q - 1).leading_zeros() as usize;
+        let mut key = transcode_from_bytes(&from.key, p_bits);
+        key.truncate(par.ell * par.n);
+        PvwSecretKey {
+            key: Array::from_shape_vec((par.ell, par.n), key).unwrap(),
+            par: par.clone(),
+        }
+    }
+}
+
+impl From<&PvwSecretKey> for PvwSecretKeyProto {
+    fn from(value: &PvwSecretKey) -> Self {
+        let mut proto = PvwSecretKeyProto::new();
+        let p_bits = 64 - (value.par.q - 1).leading_zeros() as usize;
+        proto.key = transcode_to_bytes(
+            value
+                .key
+                .outer_iter()
+                .flat_map(|ell_i| ell_i.to_vec())
+                .collect_vec()
+                .as_slice(),
+            p_bits,
+        );
+
+        proto
+    }
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use fhe::bfv::SecretKey;
     use rand::thread_rng;
 
     #[test]
     fn encrypt() {
         let mut rng = thread_rng();
-        let params = Arc::new(PVWParameters::default());
+        let params = Arc::new(PvwParameters::default());
         for _ in 0..10 {
-            let sk = PVWSecretKey::random(&params, &mut rng);
+            let sk = PvwSecretKey::random(&params, &mut rng);
             let pk = sk.public_key(&mut rng);
 
             let distr = Uniform::new(0u64, 2);
@@ -262,13 +345,13 @@ mod tests {
 
     #[test]
     fn check_probs() {
-        let params = Arc::new(PVWParameters::default());
+        let params = Arc::new(PvwParameters::default());
 
         let mut rng = thread_rng();
-        let sk = PVWSecretKey::random(&params, &mut rng);
+        let sk = PvwSecretKey::random(&params, &mut rng);
         let pk = sk.public_key(&mut rng);
 
-        let sk1 = PVWSecretKey::random(&params, &mut rng);
+        let sk1 = PvwSecretKey::random(&params, &mut rng);
         let pk1 = sk1.public_key(&mut rng);
 
         let mut count = 0;
@@ -293,14 +376,38 @@ mod tests {
     #[test]
     fn pvw_ciphertext_serialize_deserialize() {
         let mut rng = thread_rng();
-        let par = Arc::new(PVWParameters::default());
-        let sk = PVWSecretKey::random(&par, &mut rng);
+        let par = Arc::new(PvwParameters::default());
+        let sk = PvwSecretKey::random(&par, &mut rng);
         let pk = sk.public_key(&mut rng);
         let ct = pk.encrypt(&[0, 1, 0, 1], &mut rng);
 
         let ct_bytes = ct.clone().to_bytes();
-        let ct2 = PVWCiphertext::from_bytes(&ct_bytes, &par).unwrap();
+        let ct2 = PvwCiphertext::from_bytes(&ct_bytes, &par).unwrap();
         assert_eq!(&ct.a, &ct2.a);
         assert_eq!(ct.b, ct2.b);
+    }
+
+    #[test]
+    fn pvw_secret_key_serialize_deserialize() {
+        let mut rng = thread_rng();
+        let par = Arc::new(PvwParameters::default());
+        let sk = PvwSecretKey::random(&par, &mut rng);
+        let bytes = sk.to_bytes();
+        let sk2 = PvwSecretKey::from_bytes(&bytes, &par);
+        assert_eq!(sk.key, sk2.key);
+    }
+
+    #[test]
+    fn pvw_public_serialize_deserialize() {
+        let mut rng = thread_rng();
+        let par = Arc::new(PvwParameters::default());
+        let sk = PvwSecretKey::random(&par, &mut rng);
+
+        let pk = sk.public_key(&mut rng);
+        let bytes = pk.to_bytes();
+        let pk2 = PvwPublicKey::from_bytes(&bytes, &par);
+
+        assert_eq!(pk.a, pk2.a);
+        assert_eq!(pk.b, pk2.b);
     }
 }

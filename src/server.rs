@@ -1,4 +1,4 @@
-use crate::pvw::{PVWCiphertext, PVWParameters};
+use crate::pvw::{PvwCiphertext, PvwParameters};
 use crate::utils::{gen_rlk_keys, read_range_coeffs};
 use bincode::config::RejectTrailing;
 use fhe::bfv::{
@@ -276,10 +276,10 @@ pub fn range_fn(
 /// decrypt pvw cts
 pub fn decrypt_pvw(
     bfv_params: &Arc<BfvParameters>,
-    pvw_params: &PVWParameters,
+    pvw_params: &PvwParameters,
     mut ct_pvw_sk: Vec<Ciphertext>,
     rotation_key: &EvaluationKey,
-    clues: &[PVWCiphertext],
+    clues: &[PvwCiphertext],
     sk: &SecretKey,
 ) -> Vec<Ciphertext> {
     debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
@@ -509,11 +509,11 @@ pub fn finalise_combinations(
 #[allow(clippy::too_many_arguments)]
 pub fn phase1(
     bfv_params: &Arc<BfvParameters>,
-    pvw_params: &PVWParameters,
+    pvw_params: &PvwParameters,
     ct_pvw_sk: &[Ciphertext],
     rotation_key: &EvaluationKey,
     rlk_keys: &HashMap<usize, RelinearizationKey>,
-    clues: &[PVWCiphertext],
+    clues: &[PvwCiphertext],
     sk: &SecretKey,
     set_size: usize,
     degree: usize,
@@ -681,7 +681,7 @@ pub fn phase2(
 mod tests {
     use super::*;
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
-    use crate::pvw::PVWSecretKey;
+    use crate::pvw::PvwSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys_levelled,
         gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, rot_to_exponent,
@@ -708,10 +708,10 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let pvw_params = Arc::new(PVWParameters::default());
+        let pvw_params = Arc::new(PvwParameters::default());
 
         let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
-        let pvw_sk = Arc::new(PVWSecretKey::random(&pvw_params, &mut rng));
+        let pvw_sk = Arc::new(PvwSecretKey::random(&pvw_params, &mut rng));
         let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
 
         let set_size = 1 << 14;
@@ -866,14 +866,14 @@ mod tests {
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        let pvw_params = Arc::new(PVWParameters {
+        let pvw_params = Arc::new(PvwParameters {
             n: 450,
             m: 100,
             ell: 4,
             variance: 1.3,
             q: 65537,
         });
-        let pvw_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+        let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
         let pvw_pk = pvw_sk.public_key(&mut rng);
 
         let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
@@ -961,7 +961,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let pvw_params = Arc::new(PVWParameters::default());
+        let pvw_params = Arc::new(PvwParameters::default());
 
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
         let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);

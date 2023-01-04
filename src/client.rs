@@ -1,4 +1,4 @@
-use crate::pvw::{PVWParameters, PVWSecretKey};
+use crate::pvw::{PvwParameters, PvwSecretKey};
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, SecretKey};
 
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
@@ -9,9 +9,9 @@ use std::vec;
 
 pub fn gen_pvw_sk_cts(
     bfv_params: &Arc<BfvParameters>,
-    pvw_params: &PVWParameters,
+    pvw_params: &PvwParameters,
     bfv_sk: &SecretKey,
-    pvw_sk: &PVWSecretKey,
+    pvw_sk: &PvwSecretKey,
 ) -> Vec<Ciphertext> {
     debug_assert!(pvw_sk.key.dim().0 == pvw_params.ell);
 
