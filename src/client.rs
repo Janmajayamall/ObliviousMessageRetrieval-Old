@@ -3,19 +3,18 @@ use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, SecretKey};
 
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use itertools::Itertools;
-use rand::thread_rng;
+use rand::{thread_rng, CryptoRng, RngCore};
 use std::sync::Arc;
 use std::vec;
 
-pub fn gen_pvw_sk_cts(
+pub fn gen_pvw_sk_cts<R: RngCore + CryptoRng>(
     bfv_params: &Arc<BfvParameters>,
-    pvw_params: &PvwParameters,
+    pvw_params: &Arc<PvwParameters>,
     bfv_sk: &SecretKey,
     pvw_sk: &PvwSecretKey,
+    rng: &mut R,
 ) -> Vec<Ciphertext> {
     debug_assert!(pvw_sk.key.dim().0 == pvw_params.ell);
-
-    let mut rng = thread_rng();
 
     let sec_len = pvw_params.n.next_power_of_two();
     pvw_sk
@@ -31,7 +30,7 @@ pub fn gen_pvw_sk_cts(
                 }
             }
             let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
-            bfv_sk.try_encrypt(&values_pt, &mut rng).unwrap()
+            bfv_sk.try_encrypt(&values_pt, rng).unwrap()
         })
         .collect_vec()
 }

@@ -1,5 +1,6 @@
 use crate::pvw::{PvwCiphertext, PvwParameters};
 use crate::utils::{gen_rlk_keys, read_range_coeffs};
+use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
 use bincode::config::RejectTrailing;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Multiplicator,
@@ -19,6 +20,20 @@ pub struct DetectionKey {
     pub ek2: EvaluationKey,
     pub ek3: EvaluationKey,
     pub rlk_keys: HashMap<usize, RelinearizationKey>,
+    pub pvw_sk_cts: [Ciphertext; 4],
+}
+
+pub fn default_bfv() -> BfvParameters {
+    BfvParametersBuilder::new()
+        .set_degree(DEGREE)
+        .set_plaintext_modulus(MODULI_OMR_PT[0])
+        .set_moduli(MODULI_OMR)
+        .build()
+        .unwrap()
+}
+
+pub fn default_pvw() -> PvwParameters {
+    PvwParameters::default()
 }
 
 pub fn mul_many(
@@ -734,7 +749,7 @@ mod tests {
         assert!(payloads.len() == clues.len());
         println!("Clues generated");
 
-        let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
+        let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
         // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
         let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
             .unwrap()
@@ -876,7 +891,7 @@ mod tests {
         let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
         let pvw_pk = pvw_sk.public_key(&mut rng);
 
-        let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
+        let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
 
         // encrypt values
         let mut clues = vec![];

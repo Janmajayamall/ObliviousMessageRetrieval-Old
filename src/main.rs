@@ -1,24 +1,26 @@
 use client::gen_pvw_sk_cts;
+use client::{construct_lhs, construct_rhs, pv_decompress};
 use fhe::bfv::{BfvParametersBuilder, Encoding, EvaluationKeyBuilder, SecretKey};
 use fhe_traits::{FheDecoder, FheDecrypter, Serialize};
 use itertools::Itertools;
-use omr::utils::{deserialize_detection_key, gen_detection_key, serialize_detection_key};
 use protobuf::{Message, MessageDyn};
+use pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey};
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use std::io::Write;
 use std::sync::Arc;
 use std::vec;
+use utils::{
+    assign_buckets, deserialize_detection_key, gen_detection_key, serialize_detection_key,
+    solve_equations,
+};
 
 mod client;
 mod pvw;
 mod server;
 mod utils;
 
-use crate::client::{construct_lhs, construct_rhs, pv_decompress};
-use crate::utils::{assign_buckets, solve_equations};
-use pvw::{PVWCiphertext, PVWParameters, PVWSecretKey, PublicKey};
 use server::{phase1, phase2};
 
 const MODULI_OMR: &[u64; 15] = &[
@@ -58,9 +60,9 @@ const CT_SPAN_COUNT: usize = 7;
 
 pub fn gen_data(
     set_size: usize,
-    pvw_params: &Arc<PVWParameters>,
-    pvw_pk: &PublicKey,
-) -> (Vec<PVWCiphertext>, Vec<Vec<u8>>) {
+    pvw_params: &Arc<PvwParameters>,
+    pvw_pk: &PvwPublicKey,
+) -> (Vec<PvwCiphertext>, Vec<Vec<u8>>) {
     println!("Generating clues and messages...");
 
     assert!(set_size > 50);
@@ -90,15 +92,15 @@ pub fn gen_data(
     let payload_distr = Uniform::new(0u8, u8::MAX);
 
     // let other = {
-    //     let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+    //     let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     //     tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
     // };
-    let data: (Vec<PVWCiphertext>, Vec<Vec<u8>>) = (0..set_size)
+    let data: (Vec<PvwCiphertext>, Vec<Vec<u8>>) = (0..set_size)
         .map(|index| {
             let clue = if pertinent_indices.contains(&index) {
                 pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
             } else {
-                let tmp_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+                let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
                 tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
             };
             let payload = payload_distr
@@ -131,8 +133,10 @@ fn calculate_detection_key_size() {
             .build()
             .unwrap(),
     );
+    let pvw_params = Arc::new(PvwParameters::default());
     let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-    let key = gen_detection_key(&bfv_params, &bfv_sk, &mut rng);
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    let key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
     let s = serialize_detection_key(&key);
     println!("Detection key size: {}MB", s.len() as f64 / 1000000.0)
 }
@@ -148,18 +152,16 @@ fn run() {
             .unwrap(),
     );
     let pt_bits = (64 - bfv_params.plaintext().leading_zeros() - 1) as usize;
-    let pvw_params = Arc::new(PVWParameters::default());
+    let pvw_params = Arc::new(PvwParameters::default());
 
     // CLIENT SETUP //
     let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-    let pvw_sk = PVWSecretKey::random(&pvw_params, &mut rng);
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
     // pvw secret key encrypted under bfv
     println!("Generating client keys");
-    let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk);
-
-    let d_key = gen_detection_key(&bfv_params, &bfv_sk, &mut rng);
+    let d_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
     let d_key_serialized = serialize_detection_key(&d_key);
 
     // Generate sample data //
@@ -172,9 +174,9 @@ fn run() {
     .unwrap();
     println!("Pertinent indices: {pertinent_indices:?}");
 
-    // let data: (Vec<PVWCiphertext>, Vec<Vec<u64>>) = (0..SET_SIZE)
+    // let data: (Vec<PvwCiphertext>, Vec<Vec<u64>>) = (0..SET_SIZE)
     //     .map(|index| {
-    //         let clue: PVWCiphertext = bincode::deserialize(
+    //         let clue: PvwCiphertext = bincode::deserialize(
     //             &std::fs::read(format!("target/omr/clue-{index}.bin")).expect("Clue file missing!"),
     //         )
     //         .expect("Invalid clue file!");
@@ -223,7 +225,7 @@ fn run() {
     let mut pertinency_cts = phase1(
         &bfv_params,
         &pvw_params,
-        &ct_pvw_sk,
+        &d_key.pvw_sk_cts,
         &d_key.ek1,
         &d_key.rlk_keys,
         &clues,

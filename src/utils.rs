@@ -1,5 +1,8 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-use fhe::bfv::{BfvParameters, EvaluationKey, EvaluationKeyBuilder, RelinearizationKey, SecretKey};
+
+use fhe::bfv::{
+    BfvParameters, Ciphertext, EvaluationKey, EvaluationKeyBuilder, RelinearizationKey, SecretKey,
+};
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
     zq::Modulus,
@@ -14,6 +17,7 @@ use std::vec;
 use std::{collections::HashMap, fs::File};
 
 use crate::{
+    client::gen_pvw_sk_cts,
     pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
     server::DetectionKey,
 };
@@ -361,33 +365,44 @@ pub fn gen_rot_keys_pv_selector<R: CryptoRng + RngCore>(
 
 pub fn gen_detection_key<R: CryptoRng + RngCore>(
     bfv_params: &Arc<BfvParameters>,
-    sk: &SecretKey,
+    pvw_params: &Arc<PvwParameters>,
+    bfv_sk: &SecretKey,
+    pvw_sk: &PvwSecretKey,
     rng: &mut R,
 ) -> DetectionKey {
-    let ek1 = EvaluationKeyBuilder::new_leveled(sk, 0, 0)
+    let ek1 = EvaluationKeyBuilder::new_leveled(bfv_sk, 0, 0)
         .unwrap()
         .enable_column_rotation(1)
         .unwrap()
         .build(rng)
         .unwrap();
-    let rlk_keys = gen_rlk_keys_levelled(bfv_params, sk, rng);
-    let ek2 = gen_rot_keys_pv_selector(bfv_params, sk, 10, 9, rng);
-    let ek3 = gen_rot_keys_inner_product(bfv_params, sk, 12, 11, rng);
+    let rlk_keys = gen_rlk_keys_levelled(bfv_params, bfv_sk, rng);
+    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 10, 9, rng);
+    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 12, 11, rng);
+    let pvw_sk_cts = gen_pvw_sk_cts(bfv_params, pvw_params, bfv_sk, pvw_sk, rng);
+
+    assert!(pvw_sk_cts.len() == 4);
 
     DetectionKey {
         ek1,
         ek2,
         ek3,
         rlk_keys,
+        pvw_sk_cts: pvw_sk_cts.try_into().unwrap(),
     }
 }
 
+/// Serialization is correct only when default OMR params are used.
 pub fn serialize_detection_key(key: &DetectionKey) -> Vec<u8> {
     let mut s = vec![];
 
     s.extend_from_slice(key.ek1.to_bytes().as_slice());
     s.extend_from_slice(key.ek2.to_bytes().as_slice());
     s.extend_from_slice(key.ek3.to_bytes().as_slice());
+
+    key.pvw_sk_cts.iter().for_each(|i| {
+        s.extend_from_slice(i.to_bytes().as_slice());
+    });
 
     (1..11).into_iter().for_each(|i| {
         s.extend_from_slice(key.rlk_keys.get(&i).unwrap().to_bytes().as_slice());
@@ -402,6 +417,13 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
     let ek2 = EvaluationKey::from_bytes(&bytes[3030031..3816202], bfv_params).unwrap();
     let ek3 = EvaluationKey::from_bytes(&bytes[3816202..5397013], bfv_params).unwrap();
 
+    let mut pvw_sk_cts = [
+        Ciphertext::from_bytes(&bytes[5397013..5599046], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[5599046..5801079], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[5801079..6003112], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[6003112..6205145], bfv_params).unwrap(),
+    ];
+
     let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
     macro_rules! rlk {
         ($i: literal, $r: expr) => {
@@ -411,22 +433,23 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
             );
         };
     }
-    rlk!(1, 5397013..8225040);
-    rlk!(2, 8225040..10651390);
-    rlk!(3, 10651390..12798941);
-    rlk!(4, 12798941..14677420);
-    rlk!(5, 14677420..16231532);
-    rlk!(6, 16231532..17491997);
-    rlk!(7, 17491997..18489535);
-    rlk!(8, 18489535..19254866);
-    rlk!(9, 19254866..19818710);
-    rlk!(10, 19818710..);
+    rlk!(1, 6205145..9033172);
+    rlk!(2, 9033172..11459522);
+    rlk!(3, 11459522..13607073);
+    rlk!(4, 13607073..15485552);
+    rlk!(5, 15485552..17039664);
+    rlk!(6, 17039664..18300129);
+    rlk!(7, 18300129..19297667);
+    rlk!(8, 19297667..20062998);
+    rlk!(9, 20062998..20626842);
+    rlk!(10, 20626842..21019919);
 
     DetectionKey {
         ek1,
         ek2,
         ek3,
         rlk_keys,
+        pvw_sk_cts,
     }
 }
 
@@ -558,11 +581,13 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        let pvw_par = Arc::new(PvwParameters::default());
 
         let mut rng = thread_rng();
         let sk = SecretKey::random(&par, &mut rng);
+        let pvw_sk = PvwSecretKey::random(&pvw_par, &mut rng);
 
-        let key = gen_detection_key(&par, &sk, &mut rng);
+        let key = gen_detection_key(&par, &pvw_par, &sk, &pvw_sk, &mut rng);
         let s = serialize_detection_key(&key);
         let key1 = deserialize_detection_key(&par, &s);
 
@@ -582,6 +607,11 @@ mod tests {
             s.extend_from_slice(key.ek3.to_bytes().as_slice());
             r.push(s.len());
 
+            key.pvw_sk_cts.into_iter().for_each(|i| {
+                s.extend_from_slice(i.to_bytes().as_slice());
+                r.push(s.len());
+            });
+
             (1..11).into_iter().for_each(|i| {
                 s.extend_from_slice(key.rlk_keys.get(&i).unwrap().to_bytes().as_slice());
                 r.push(s.len());
@@ -599,22 +629,24 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        let pvw_par = Arc::new(PvwParameters::default());
 
         let mut rng = thread_rng();
         let sk = SecretKey::random(&par, &mut rng);
+        let pvw_sk = PvwSecretKey::random(&pvw_par, &mut rng);
 
-        let key = gen_detection_key(&par, &sk, &mut rng);
+        let key = gen_detection_key(&par, &pvw_par, &sk, &pvw_sk, &mut rng);
         serialize_detection_key(key);
     }
 
     #[test]
     fn print_rlk_macro() {
         let r = vec![
-            3030031, 3816202, 5397013, 8225040, 10651390, 12798941, 14677420, 16231532, 17491997,
-            18489535, 19254866, 19818710, 20211787,
+            3030031, 3816202, 5397013, 5599046, 5801079, 6003112, 6205145, 9033172, 11459522,
+            13607073, 15485552, 17039664, 18300129, 19297667, 20062998, 20626842, 21019919,
         ];
-        for i in (3..r.len()) {
-            println!("rlk!({}, {}..{});", i - 2, r[i - 1], r[i]);
+        for i in (7..r.len()) {
+            println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);
         }
     }
 }

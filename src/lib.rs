@@ -1,7 +1,9 @@
 pub mod client;
 pub mod pvw;
-mod server;
+pub mod server;
 pub mod utils;
+pub use fhe;
+pub use fhe_traits;
 
 pub const MODULI_OMR: &[u64; 15] = &[
     268369921,

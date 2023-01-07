@@ -17,7 +17,7 @@ use proto::pvw::{
     PvwSecretKey as PvwSecretKeyProto,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PvwParameters {
     pub n: usize,
     pub m: usize,
@@ -38,7 +38,7 @@ impl Default for PvwParameters {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PvwCiphertext {
     par: Arc<PvwParameters>,
     pub a: Vec<u64>,
@@ -46,12 +46,12 @@ pub struct PvwCiphertext {
 }
 
 impl PvwCiphertext {
-    fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let proto = PvwCiphertextProto::from(self);
         proto.write_to_bytes().unwrap()
     }
 
-    fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> Option<PvwCiphertext> {
+    pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> Option<PvwCiphertext> {
         let from = PvwCiphertextProto::parse_from_bytes(bytes).unwrap();
         let p_bits = (64 - (par.q - 1).leading_zeros()) as usize;
         let mut a = transcode_from_bytes(&from.a, p_bits);
