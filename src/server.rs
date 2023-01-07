@@ -1,6 +1,9 @@
 use crate::pvw::{PvwCiphertext, PvwParameters};
-use crate::utils::{gen_rlk_keys, read_range_coeffs};
-use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
+use crate::utils::{
+    assign_buckets, deserialize_detection_key, gen_rlk_keys, read_range_coeffs,
+    serialize_message_digest,
+};
+use crate::{CT_SPAN_COUNT, DEGREE, GAMMA, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE};
 use bincode::config::RejectTrailing;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Multiplicator,
@@ -9,6 +12,8 @@ use fhe::bfv::{
 use fhe_math::zq::Modulus;
 use fhe_traits::FheEncoder;
 use itertools::{izip, Itertools};
+use rand::{thread_rng, Rng, SeedableRng};
+use rand_chacha::ChaChaRng;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -232,13 +237,17 @@ pub fn range_fn(
         // now = std::time::SystemTime::now();
         for j in 1..257 {
             let c = coeffs[(i * 256) + (j - 1)];
+
             let c_pt = Plaintext::try_encode(
                 &vec![c; bfv_params.degree()],
                 Encoding::simd_at_level(level_offset + 8),
                 bfv_params,
             )
             .unwrap();
+
+            // now = std::time::SystemTime:w:now();
             let scalar_product = &k_powers_of_x[j - 1] * &c_pt;
+            // println!(" scalar product {} {} {:?}", i, j, now.elapsed().unwrap());
 
             if !flag {
                 sum = scalar_product;
@@ -545,8 +554,6 @@ pub fn phase1(
     let res: Vec<Ciphertext> = clues
         .par_chunks(degree)
         .map(|c| {
-            println!("Phase 1 ct count {}", c.len());
-
             // level 0
             let decrypted_clues = decrypt_pvw(
                 bfv_params,
@@ -558,19 +565,15 @@ pub fn phase1(
             );
             assert!(decrypted_clues.len() == pvw_params.ell);
 
-            println!("Phase 1 step 1");
-
             // level 1; decryption consumes 1
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
                 .map(|d| range_fn(bfv_params, d, rlk_keys, 1, "params_850.bin", sk))
                 .collect_vec();
-            println!("Phase 1 step 2");
 
             // level 9; range fn consumes 8
             mul_many(&mut ranged_decrypted_clues, rlk_keys, 9);
             assert!(ranged_decrypted_clues.len() == 1);
-            println!("Phase 1 step 3");
             // level 10; mul_many consumes 1
             ranged_decrypted_clues[0].clone()
         })
@@ -701,6 +704,80 @@ pub fn phase2(
     (pertinency_vectors[0].clone(), rhs[0].clone())
 }
 
+pub fn server_process(
+    clues: &[PvwCiphertext],
+    messages: &[Vec<u64>],
+    detection_key: &[u8],
+) -> Vec<u8> {
+    debug_assert!(clues.len() == messages.len());
+
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_moduli(MODULI_OMR)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .build()
+            .unwrap(),
+    );
+
+    let pvw_params = Arc::new(PvwParameters::default());
+    let detection_key = deserialize_detection_key(&bfv_params, detection_key);
+
+    // FIXME: REMOVE THIS
+    let mut rng = thread_rng();
+    let dummy_bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+
+    // phase 1
+    println!("Phase 1...");
+    let now = std::time::Instant::now();
+    let mut pertinency_cts = phase1(
+        &bfv_params,
+        &pvw_params,
+        &detection_key.pvw_sk_cts,
+        &detection_key.ek1,
+        &detection_key.rlk_keys,
+        clues,
+        &dummy_bfv_sk,
+    );
+    println!("Phase 1 time: {:?}", now.elapsed());
+
+    // seeded rng for buckets
+    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
+    thread_rng().fill(&mut seed);
+    let mut rng = ChaChaRng::from_seed(seed);
+    let (assigned_buckets, assigned_weights) =
+        assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
+
+    println!("Phase 2...");
+    let (pv_ct, msg_cts) = phase2(
+        &assigned_buckets,
+        &assigned_weights,
+        &bfv_params,
+        &detection_key.ek2,
+        &detection_key.ek3,
+        &mut pertinency_cts,
+        messages,
+        32,
+        DEGREE,
+        10,
+        SET_SIZE,
+        GAMMA,
+        CT_SPAN_COUNT,
+        M,
+        M_ROW_SPAN,
+        &dummy_bfv_sk,
+    );
+    println!("Phase 2 time: {:?}", now.elapsed());
+
+    let message_digest = MessageDigest {
+        seed,
+        pv: pv_ct,
+        msgs: msg_cts,
+    };
+
+    serialize_message_digest(&message_digest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,8 +785,8 @@ mod tests {
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
-        gen_rlk_keys_levelled, gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly,
-        rot_to_exponent, solve_equations,
+        gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, serialize_detection_key,
+        solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use fhe::bfv::EvaluationKeyBuilder;
@@ -720,6 +797,50 @@ mod tests {
     use rand::distributions::Uniform;
     use rand::prelude::Distribution;
     use rand::{thread_rng, Rng};
+    use std::io::Write;
+
+    #[test]
+    fn server_process_test() {
+        let mut rng = thread_rng();
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_moduli(MODULI_OMR)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .build()
+                .unwrap(),
+        );
+
+        let pvw_params = Arc::new(PvwParameters::default());
+
+        // CLIENT SETUP //
+        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+        let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+        let pvw_pk = pvw_sk.public_key(&mut rng);
+        let d_key = serialize_detection_key(&gen_detection_key(
+            &bfv_params,
+            &pvw_params,
+            &bfv_sk,
+            &pvw_sk,
+            &mut rng,
+        ));
+
+        // gen clues
+        let mut pertinent_indices = gen_pertinent_indices(50, SET_SIZE);
+        pertinent_indices.sort();
+        println!("Pertinent indices: {:?}", pertinent_indices);
+
+        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, SET_SIZE);
+        let payloads = gen_paylods(SET_SIZE);
+        println!("Clues generated");
+
+        let msg_digest = server_process(&clues, &payloads, &d_key);
+
+        std::fs::File::create("target/message.bin")
+            .unwrap()
+            .write_all(&msg_digest)
+            .unwrap();
+    }
 
     #[test]
     fn test_phase1_and_phase2() {

@@ -5,10 +5,9 @@ use omr::{
     fhe_traits::*,
     pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
     server::*,
-    server_process,
     utils::*,
 };
-use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
+use rand::thread_rng;
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use std::vec;
@@ -48,72 +47,6 @@ const GAMMA: usize = 5;
 // no of cts required to accomodate all
 // rows of buckets; = CEIL((M * M_ROW_SPACE) / DEGREE)
 const CT_SPAN_COUNT: usize = 7;
-
-pub fn gen_data(
-    set_size: usize,
-    pvw_params: &Arc<PvwParameters>,
-    pvw_pk: &PvwPublicKey,
-) -> (Vec<usize>, (Vec<PvwCiphertext>, Vec<Vec<u8>>)) {
-    println!("Generating clues and messages...");
-
-    assert!(set_size > 50);
-    let mut rng = thread_rng();
-
-    let tmp = Uniform::new(0, set_size);
-    let mut pertinent_indices = vec![];
-    // 50 messages are pertinent
-    while pertinent_indices.len() != 50 {
-        let v = tmp.sample(&mut rng);
-        if !pertinent_indices.contains(&v) {
-            pertinent_indices.push(v);
-        }
-    }
-
-    // create dir
-    // std::fs::create_dir_all("target/omr").unwrap();
-
-    // store pertinent indices for later
-    // {
-    //     std::fs::File::create("target/omr/pertinent-indices.bin")
-    //         .unwrap()
-    //         .write_all(&bincode::serialize(&pertinent_indices).unwrap())
-    //         .unwrap();
-    // }
-
-    let payload_distr = Uniform::new(0u8, u8::MAX);
-
-    let other = {
-        let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-        tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
-    };
-    let data: (Vec<PvwCiphertext>, Vec<Vec<u8>>) = (0..set_size)
-        .map(|index| {
-            let clue = if pertinent_indices.contains(&index) {
-                pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
-            } else {
-                // let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-                // tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
-                other.clone()
-            };
-            let payload = payload_distr
-                .sample_iter(rng.clone())
-                .take(256)
-                .collect_vec();
-            (clue, payload)
-
-            // let clue_buff = bincode::serialize(&clue).unwrap();
-            // std::fs::File::create(format!("target/omr/clue-{index}.bin"))
-            //     .unwrap()
-            //     .write_all(&clue_buff)
-            //     .unwrap();
-            // std::fs::File::create(format!("target/omr/payload-{index}.bin"))
-            //     .unwrap()
-            //     .write_all(&payload)
-            //     .unwrap();
-        })
-        .unzip();
-    (pertinent_indices, data)
-}
 
 fn calculate_detection_key_size() {
     let mut rng = thread_rng();
@@ -156,43 +89,11 @@ fn run() {
     let d_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
     let d_key_serialized = serialize_detection_key(&d_key);
 
-    // Generate sample data //
-    let data = gen_data(SET_SIZE, &pvw_params, &pvw_pk);
-
-    let mut pertinent_indices: Vec<usize> = bincode::deserialize(
-        &std::fs::read("target/omr/pertinent-indices.bin")
-            .expect("Indices file missing! Run with -g flag."),
-    )
-    .unwrap();
-    println!("Pertinent indices: {pertinent_indices:?}");
-
-    // let data: (Vec<PvwCiphertext>, Vec<Vec<u64>>) = (0..SET_SIZE)
-    //     .map(|index| {
-    //         let clue: PvwCiphertext = bincode::deserialize(
-    //             &std::fs::read(format!("target/omr/clue-{index}.bin")).expect("Clue file missing!"),
-    //         )
-    //         .expect("Invalid clue file!");
-    //         // change payload from bytes to collection of two bytes
-    //         let payload: Vec<u64> = std::fs::read(format!("target/omr/payload-{index}.bin"))
-    //             .expect("Payload file missing!")
-    //             .chunks(2)
-    //             .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
-    //             .collect();
-    //         assert!(payload.len() == 128);
-
-    //         (clue, payload)
-    //     })
-    //     .unzip();
-    let clues = data.1 .0;
-    let payloads = data.1 .1;
-    let payloads = payloads
-        .iter()
-        .map(|pl| {
-            pl.chunks(2)
-                .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
-                .collect()
-        })
-        .collect::<Vec<Vec<u64>>>();
+    let mut pertinent_indices = gen_pertinent_indices(50, SET_SIZE);
+    pertinent_indices.sort();
+    println!("Pertinent indices: {:?}", pertinent_indices);
+    let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, SET_SIZE);
+    let payloads = gen_paylods(SET_SIZE);
 
     let mut pertinent_payloads = vec![];
     (0..SET_SIZE)
@@ -204,55 +105,18 @@ fn run() {
         });
 
     // SERVER SIDE //
-    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
-    thread_rng().fill(&mut seed);
-    let mut rng = ChaChaRng::from_seed(seed);
-
-    let d_key = deserialize_detection_key(&bfv_params, &d_key_serialized);
-
-    let (assigned_buckets, assigned_weights) =
-        assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
-    println!("Server: Running phase1");
+    println!("Server: Starting OMR...");
     let now = std::time::Instant::now();
-    let mut pertinency_cts = phase1(
-        &bfv_params,
-        &pvw_params,
-        &d_key.pvw_sk_cts,
-        &d_key.ek1,
-        &d_key.rlk_keys,
-        &clues,
-        &bfv_sk,
-    );
-    let phase1_time = now.elapsed();
-    println!("Server: Running phase2");
-    let (compressed_pv, msg_cts) = phase2(
-        &assigned_buckets,
-        &assigned_weights,
-        &bfv_params,
-        &d_key.ek2,
-        &d_key.ek3,
-        &mut pertinency_cts,
-        &payloads,
-        32,
-        DEGREE,
-        10,
-        SET_SIZE,
-        GAMMA,
-        CT_SPAN_COUNT,
-        M,
-        M_ROW_SPAN,
-        &bfv_sk,
-    );
-    let phase2_time = now.elapsed() - phase1_time;
-    let total_time = now.elapsed();
-    println!("Server: Phase1 took: {phase1_time:?}; Phase2 took: {phase2_time:?}");
-    println!("Server: Total server time: {total_time:?}");
+    let message_digest_bytes = server_process(&clues, &payloads, &d_key_serialized);
+    println!("Server time: {:?}", now.elapsed());
+
+    let message_digest = deserialize_message_digest(&bfv_params, &message_digest_bytes);
 
     // CLIENT SIDE //
     println!("Client: Processing digest");
     let now = std::time::Instant::now();
 
-    let pt = bfv_sk.try_decrypt(&compressed_pv).unwrap();
+    let pt = bfv_sk.try_decrypt(&message_digest.pv).unwrap();
     let pv_values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
     let pv = pv_decompress(&pv_values, pt_bits);
     {
@@ -268,6 +132,8 @@ fn run() {
         // println!("Res indices      {:?}", res_indices);
         // assert!(false);
     }
+    let (assigned_buckets, assigned_weights) =
+        assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
     let lhs = construct_lhs(
         &pv,
         assigned_buckets,
@@ -278,7 +144,8 @@ fn run() {
         SET_SIZE,
     );
 
-    let m_rows = msg_cts
+    let m_rows = message_digest
+        .msgs
         .iter()
         .flat_map(|m| {
             Vec::<u64>::try_decode(&bfv_sk.try_decrypt(m).unwrap(), Encoding::simd()).unwrap()
@@ -291,71 +158,18 @@ fn run() {
     assert_eq!(pertinent_payloads, res_payloads);
 }
 
-fn run2() {
-    let mut rng = thread_rng();
-    let bfv_params = Arc::new(
-        BfvParametersBuilder::new()
-            .set_degree(DEGREE)
-            .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli(MODULI_OMR)
-            .build()
-            .unwrap(),
-    );
-    let pvw_params = Arc::new(PvwParameters::default());
-
-    // CLIENT SETUP //
-    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    let pvw_pk = pvw_sk.public_key(&mut rng);
-    let d_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-
-    // Generate sample data //
-    let data = gen_data(SET_SIZE, &pvw_params, &pvw_pk);
-
-    let mut pertinent_indices = data.0;
-    println!("Pertinent indices: {pertinent_indices:?}");
-
-    let clues = data.1 .0;
-    let payloads = data.1 .1;
-    let payloads = payloads
-        .iter()
-        .map(|pl| {
-            pl.chunks(2)
-                .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
-                .collect()
-        })
-        .collect::<Vec<Vec<u64>>>();
-
-    let mut pertinent_payloads = vec![];
-    (0..SET_SIZE)
-        .zip(payloads.iter())
-        .for_each(|(index, load)| {
-            if pertinent_indices.contains(&index) {
-                pertinent_payloads.push(load.clone());
-            }
-        });
-
-    let msg_digest = server_process(&clues, &payloads, &d_key);
-
-    std::fs::File::create("/target/message.bin")
-        .unwrap()
-        .write_all(&msg_digest)
-        .unwrap();
-}
-
 fn main() {
-    run2();
-    // let val = std::env::args().nth(1).map(|v| {
-    //     v.as_str()
-    //         .parse::<usize>()
-    //         .expect("Choose 1 to run demo. Choose 2 to display detection key size")
-    // });
+    let val = std::env::args().nth(1).map(|v| {
+        v.as_str()
+            .parse::<usize>()
+            .expect("Choose 1 to run demo. Choose 2 to display detection key size")
+    });
 
-    // match val {
-    //     Some(1) => run(),
-    //     Some(2) => calculate_detection_key_size(),
-    //     _ => {
-    //         println!("Choose 1 to run demo. Choose 2 to display detection key size")
-    //     }
-    // }
+    match val {
+        Some(1) => run(),
+        Some(2) => calculate_detection_key_size(),
+        _ => {
+            println!("Choose 1 to run demo. Choose 2 to display detection key size")
+        }
+    }
 }
