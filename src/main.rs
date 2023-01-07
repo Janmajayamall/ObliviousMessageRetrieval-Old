@@ -1,27 +1,18 @@
-use client::gen_pvw_sk_cts;
-use client::{construct_lhs, construct_rhs, pv_decompress};
-use fhe::bfv::{BfvParametersBuilder, Encoding, EvaluationKeyBuilder, SecretKey};
-use fhe_traits::{FheDecoder, FheDecrypter, Serialize};
 use itertools::Itertools;
-use protobuf::{Message, MessageDyn};
-use pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey};
+use omr::{
+    client::*,
+    fhe::bfv::{BfvParametersBuilder, Encoding, SecretKey},
+    fhe_traits::*,
+    pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
+    server::*,
+    server_process,
+    utils::*,
+};
 use rand::{distributions::Uniform, prelude::Distribution, thread_rng};
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
-use std::io::Write;
-use std::sync::Arc;
 use std::vec;
-use utils::{
-    assign_buckets, deserialize_detection_key, gen_detection_key, serialize_detection_key,
-    solve_equations,
-};
-
-mod client;
-mod pvw;
-mod server;
-mod utils;
-
-use server::{phase1, phase2};
+use std::{io::Write, sync::Arc};
 
 const MODULI_OMR: &[u64; 15] = &[
     268369921,
@@ -62,7 +53,7 @@ pub fn gen_data(
     set_size: usize,
     pvw_params: &Arc<PvwParameters>,
     pvw_pk: &PvwPublicKey,
-) -> (Vec<PvwCiphertext>, Vec<Vec<u8>>) {
+) -> (Vec<usize>, (Vec<PvwCiphertext>, Vec<Vec<u8>>)) {
     println!("Generating clues and messages...");
 
     assert!(set_size > 50);
@@ -79,29 +70,30 @@ pub fn gen_data(
     }
 
     // create dir
-    std::fs::create_dir_all("target/omr").unwrap();
+    // std::fs::create_dir_all("target/omr").unwrap();
 
     // store pertinent indices for later
-    {
-        std::fs::File::create("target/omr/pertinent-indices.bin")
-            .unwrap()
-            .write_all(&bincode::serialize(&pertinent_indices).unwrap())
-            .unwrap();
-    }
+    // {
+    //     std::fs::File::create("target/omr/pertinent-indices.bin")
+    //         .unwrap()
+    //         .write_all(&bincode::serialize(&pertinent_indices).unwrap())
+    //         .unwrap();
+    // }
 
     let payload_distr = Uniform::new(0u8, u8::MAX);
 
-    // let other = {
-    //     let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    //     tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
-    // };
+    let other = {
+        let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+        tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+    };
     let data: (Vec<PvwCiphertext>, Vec<Vec<u8>>) = (0..set_size)
         .map(|index| {
             let clue = if pertinent_indices.contains(&index) {
                 pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
             } else {
-                let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-                tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+                // let tmp_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+                // tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng)
+                other.clone()
             };
             let payload = payload_distr
                 .sample_iter(rng.clone())
@@ -120,7 +112,7 @@ pub fn gen_data(
             //     .unwrap();
         })
         .unzip();
-    data
+    (pertinent_indices, data)
 }
 
 fn calculate_detection_key_size() {
@@ -191,8 +183,8 @@ fn run() {
     //         (clue, payload)
     //     })
     //     .unzip();
-    let clues = data.0;
-    let payloads = data.1;
+    let clues = data.1 .0;
+    let payloads = data.1 .1;
     let payloads = payloads
         .iter()
         .map(|pl| {
@@ -230,8 +222,6 @@ fn run() {
         &d_key.rlk_keys,
         &clues,
         &bfv_sk,
-        SET_SIZE,
-        DEGREE,
     );
     let phase1_time = now.elapsed();
     println!("Server: Running phase2");
@@ -249,6 +239,7 @@ fn run() {
         SET_SIZE,
         GAMMA,
         CT_SPAN_COUNT,
+        M,
         M_ROW_SPAN,
         &bfv_sk,
     );
@@ -286,6 +277,7 @@ fn run() {
         GAMMA,
         SET_SIZE,
     );
+
     let m_rows = msg_cts
         .iter()
         .flat_map(|m| {
@@ -299,18 +291,71 @@ fn run() {
     assert_eq!(pertinent_payloads, res_payloads);
 }
 
-fn main() {
-    let val = std::env::args().nth(1).map(|v| {
-        v.as_str()
-            .parse::<usize>()
-            .expect("Choose 1 to run demo. Choose 2 to display detection key size")
-    });
+fn run2() {
+    let mut rng = thread_rng();
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .set_moduli(MODULI_OMR)
+            .build()
+            .unwrap(),
+    );
+    let pvw_params = Arc::new(PvwParameters::default());
 
-    match val {
-        Some(1) => run(),
-        Some(2) => calculate_detection_key_size(),
-        _ => {
-            println!("Choose 1 to run demo. Choose 2 to display detection key size")
-        }
-    }
+    // CLIENT SETUP //
+    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
+    let d_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+
+    // Generate sample data //
+    let data = gen_data(SET_SIZE, &pvw_params, &pvw_pk);
+
+    let mut pertinent_indices = data.0;
+    println!("Pertinent indices: {pertinent_indices:?}");
+
+    let clues = data.1 .0;
+    let payloads = data.1 .1;
+    let payloads = payloads
+        .iter()
+        .map(|pl| {
+            pl.chunks(2)
+                .map(|v| (v[0] as u64) + ((v[1] as u64) << 8))
+                .collect()
+        })
+        .collect::<Vec<Vec<u64>>>();
+
+    let mut pertinent_payloads = vec![];
+    (0..SET_SIZE)
+        .zip(payloads.iter())
+        .for_each(|(index, load)| {
+            if pertinent_indices.contains(&index) {
+                pertinent_payloads.push(load.clone());
+            }
+        });
+
+    let msg_digest = server_process(&clues, &payloads, &d_key);
+
+    std::fs::File::create("/target/message.bin")
+        .unwrap()
+        .write_all(&msg_digest)
+        .unwrap();
+}
+
+fn main() {
+    run2();
+    // let val = std::env::args().nth(1).map(|v| {
+    //     v.as_str()
+    //         .parse::<usize>()
+    //         .expect("Choose 1 to run demo. Choose 2 to display detection key size")
+    // });
+
+    // match val {
+    //     Some(1) => run(),
+    //     Some(2) => calculate_detection_key_size(),
+    //     _ => {
+    //         println!("Choose 1 to run demo. Choose 2 to display detection key size")
+    //     }
+    // }
 }

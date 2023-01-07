@@ -1,5 +1,4 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
-
 use fhe::bfv::{
     BfvParameters, Ciphertext, EvaluationKey, EvaluationKeyBuilder, RelinearizationKey, SecretKey,
 };
@@ -19,7 +18,7 @@ use std::{collections::HashMap, fs::File};
 use crate::{
     client::gen_pvw_sk_cts,
     pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
-    server::DetectionKey,
+    server::{DetectionKey, MessageDigest},
 };
 
 pub fn read_range_coeffs(path: &str) -> Vec<u64> {
@@ -451,6 +450,39 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
         rlk_keys,
         pvw_sk_cts,
     }
+}
+
+pub fn serialize_message_digest(digest: &MessageDigest) -> Vec<u8> {
+    let mut s = vec![];
+
+    s.extend_from_slice(digest.seed.as_slice());
+    s.extend_from_slice(digest.pv.to_bytes().as_slice());
+
+    digest.msgs.iter().for_each(|c| {
+        s.extend_from_slice(c.to_bytes().as_slice());
+    });
+
+    s
+}
+
+pub fn deserialize_message_digest(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> MessageDigest {
+    let ct_size = 14364;
+    let mut offset = 32;
+
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&bytes[..32]);
+    offset += 32;
+
+    let pv = Ciphertext::from_bytes(&bytes[offset..(offset + ct_size)], bfv_params).unwrap();
+    offset += ct_size;
+
+    let mut msgs = vec![];
+    while offset < bytes.len() {
+        msgs.push(Ciphertext::from_bytes(&bytes[offset..(offset + ct_size)], bfv_params).unwrap());
+        offset += ct_size;
+    }
+
+    MessageDigest { seed, pv, msgs }
 }
 
 pub fn random_data(mut size_bits: usize) -> Vec<u64> {

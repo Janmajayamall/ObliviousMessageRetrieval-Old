@@ -23,6 +23,12 @@ pub struct DetectionKey {
     pub pvw_sk_cts: [Ciphertext; 4],
 }
 
+pub struct MessageDigest {
+    pub pv: Ciphertext,
+    pub msgs: Vec<Ciphertext>,
+    pub seed: [u8; 32],
+}
+
 pub fn default_bfv() -> BfvParameters {
     BfvParametersBuilder::new()
         .set_degree(DEGREE)
@@ -457,14 +463,14 @@ pub fn pv_weights(
     gamma: usize,
     offset: usize,
     level: usize,
-    degree: usize,
 ) -> Vec<Vec<Ciphertext>> {
+    let degree = bfv_params.degree();
     let q_mod = bfv_params.plaintext();
     let modulus = Modulus::new(q_mod).unwrap();
 
-    let mut products = vec![vec![Ciphertext::zero(&bfv_params); ct_span_count]; batch_size];
+    let mut products = vec![vec![Ciphertext::zero(bfv_params); ct_span_count]; batch_size];
     for batch_index in 0..batch_size {
-        let mut pt = vec![vec![0u64; bfv_params.degree()]; ct_span_count];
+        let mut pt = vec![vec![0u64; degree]; ct_span_count];
         for i in 0..gamma {
             // think of single bucket as spanning across `m_row_span`
             // no. of rows of plaintext vector
@@ -530,17 +536,17 @@ pub fn phase1(
     rlk_keys: &HashMap<usize, RelinearizationKey>,
     clues: &[PvwCiphertext],
     sk: &SecretKey,
-    set_size: usize,
-    degree: usize,
 ) -> Vec<Ciphertext> {
-    debug_assert!(set_size == clues.len());
-    debug_assert!(set_size % degree == 0);
+    let set_size = clues.len();
+    let degree = bfv_params.degree();
 
     println!("Phase 1 chunk count {}", set_size / degree);
 
     let res: Vec<Ciphertext> = clues
         .par_chunks(degree)
         .map(|c| {
+            println!("Phase 1 ct count {}", c.len());
+
             // level 0
             let decrypted_clues = decrypt_pvw(
                 bfv_params,
@@ -552,16 +558,19 @@ pub fn phase1(
             );
             assert!(decrypted_clues.len() == pvw_params.ell);
 
+            println!("Phase 1 step 1");
+
             // level 1; decryption consumes 1
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
                 .map(|d| range_fn(bfv_params, d, rlk_keys, 1, "params_850.bin", sk))
                 .collect_vec();
+            println!("Phase 1 step 2");
 
             // level 9; range fn consumes 8
             mul_many(&mut ranged_decrypted_clues, rlk_keys, 9);
             assert!(ranged_decrypted_clues.len() == 1);
-
+            println!("Phase 1 step 3");
             // level 10; mul_many consumes 1
             ranged_decrypted_clues[0].clone()
         })
@@ -589,11 +598,12 @@ pub fn phase2(
     set_size: usize,
     gamma: usize,
     ct_span_count: usize,
+    m: usize,
     m_row_span: usize,
     sk: &SecretKey,
 ) -> (Ciphertext, Vec<Ciphertext>) {
     debug_assert!(degree % batch_size == 0);
-    debug_assert!(set_size == degree * pertinency_cts.len()); // TODO: relax this from == to <=
+    // debug_assert!(set_size == degree * pertinency_cts.len()); // TODO: relax this from == to <=
 
     let (mut pertinency_vectors, mut rhs): (Vec<Ciphertext>, Vec<Vec<Ciphertext>>) = pertinency_cts
         .par_iter_mut()
@@ -642,10 +652,9 @@ pub fn phase2(
                     gamma,
                     offset + compress_offset,
                     level + 2,
-                    degree,
                 );
 
-                finalise_combinations(&pv_we, &mut rhs, 100, degree, m_row_span);
+                finalise_combinations(&pv_we, &mut rhs, m, degree, m_row_span);
 
                 offset += batch_size;
             }
@@ -684,9 +693,9 @@ pub fn phase2(
     //     );
     // }
 
-    pertinency_vectors[0].mod_switch_to_next_level();
+    pertinency_vectors[0].mod_switch_to_last_level();
     for r in &mut rhs[0] {
-        r.mod_switch_to_next_level();
+        r.mod_switch_to_last_level();
     }
 
     (pertinency_vectors[0].clone(), rhs[0].clone())
@@ -698,15 +707,15 @@ mod tests {
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
-        assign_buckets, gen_clues, gen_paylods, gen_pertinent_indices, gen_rlk_keys_levelled,
-        gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, rot_to_exponent,
-        solve_equations,
+        assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
+        gen_rlk_keys_levelled, gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly,
+        rot_to_exponent, solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
-    use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter};
+    use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter, Serialize};
     use itertools::izip;
     use rand::distributions::Uniform;
     use rand::prelude::Distribution;
@@ -726,6 +735,7 @@ mod tests {
         let pvw_params = Arc::new(PvwParameters::default());
 
         let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
+        let dummy_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
         let pvw_sk = Arc::new(PvwSecretKey::random(&pvw_params, &mut rng));
         let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
 
@@ -749,19 +759,8 @@ mod tests {
         assert!(payloads.len() == clues.len());
         println!("Clues generated");
 
-        let ct_pvw_sk = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-        // let top_rot_key = GaloisKey::new(&bfv_sk, 3, 0, 0, &mut rng).unwrap();
-        let top_rot_key = EvaluationKeyBuilder::new_leveled(&bfv_sk, 0, 0)
-            .unwrap()
-            .enable_column_rotation(1)
-            .unwrap()
-            .build(&mut rng)
-            .unwrap();
-
         let mut rng = thread_rng();
-        let rlk_keys = gen_rlk_keys_levelled(&bfv_params, &bfv_sk, &mut rng);
-        let rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 10, 9, &mut rng);
-        let inner_sum_rot_keys = gen_rot_keys_inner_product(&bfv_params, &bfv_sk, 12, 11, &mut rng);
+        let d_ky = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
 
         let (assigned_buckets, assigned_weights) =
             assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size, &mut rng);
@@ -771,13 +770,11 @@ mod tests {
         let mut phase1_res = phase1(
             &bfv_params,
             &pvw_params,
-            &ct_pvw_sk,
-            &top_rot_key,
-            &rlk_keys,
+            &d_ky.pvw_sk_cts,
+            &d_ky.ek1,
+            &d_ky.rlk_keys,
             &clues,
-            &bfv_sk,
-            set_size,
-            DEGREE,
+            &dummy_sk,
         );
         let phase1_time = now.elapsed();
 
@@ -786,8 +783,8 @@ mod tests {
             &assigned_buckets,
             &assigned_weights,
             &bfv_params,
-            &rot_keys,
-            &inner_sum_rot_keys,
+            &d_ky.ek2,
+            &d_ky.ek3,
             &mut phase1_res,
             &payloads,
             32,
@@ -796,8 +793,9 @@ mod tests {
             set_size,
             gamma,
             ct_span_count,
+            m,
             payload_size,
-            &bfv_sk,
+            &dummy_sk,
         );
         let end_time = now.elapsed();
         println!(
@@ -1333,5 +1331,30 @@ mod tests {
             Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&cts[0]).unwrap(), Encoding::simd())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn display_ct_size() {
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_moduli(MODULI_OMR)
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let mut ct: Ciphertext = sk
+            .try_encrypt(
+                &Plaintext::try_encode(&vec![1u64; params.degree()], Encoding::simd(), &params)
+                    .unwrap(),
+                &mut rng,
+            )
+            .unwrap();
+        ct.mod_switch_to_last_level();
+        dbg!(ct.to_bytes().len());
     }
 }
