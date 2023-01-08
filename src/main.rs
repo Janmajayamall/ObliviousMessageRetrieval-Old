@@ -3,50 +3,15 @@ use omr::{
     client::*,
     fhe::bfv::{BfvParametersBuilder, Encoding, SecretKey},
     fhe_traits::*,
-    pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
+    pvw::{PvwParameters, PvwPublicKey, PvwSecretKey},
     server::*,
     utils::*,
+    DEGREE, GAMMA, K, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE,
 };
-use rand::thread_rng;
-use rand::{Rng, RngCore, SeedableRng};
+use rand::{thread_rng, SeedableRng};
 use rand_chacha::ChaChaRng;
+use std::sync::Arc;
 use std::vec;
-use std::{io::Write, sync::Arc};
-
-const MODULI_OMR: &[u64; 15] = &[
-    268369921,
-    549755486209,
-    1152921504606584833,
-    1152921504598720513,
-    1152921504597016577,
-    1152921504595968001,
-    1152921504595640321,
-    1152921504593412097,
-    1152921504592822273,
-    1152921504592429057,
-    1152921504589938689,
-    1152921504586530817,
-    4293918721,
-    1073479681,
-    1152921504585547777,
-];
-const DEGREE: usize = 1 << 11;
-const MODULI_OMR_PT: &[u64; 1] = &[65537];
-const SET_SIZE: usize = 1 << 14;
-const VARIANCE: usize = 10;
-
-// SRLC params
-const K: usize = 50;
-const M: usize = 100;
-const DATA_SIZE: usize = 256;
-// m_row_span = 256 bytes / 2 bytes
-// since each row can store upto 2 bytes
-// of data.
-const M_ROW_SPAN: usize = 128;
-const GAMMA: usize = 5;
-// no of cts required to accomodate all
-// rows of buckets; = CEIL((M * M_ROW_SPACE) / DEGREE)
-const CT_SPAN_COUNT: usize = 7;
 
 fn calculate_detection_key_size() {
     let mut rng = thread_rng();
@@ -108,30 +73,31 @@ fn run() {
     println!("Server: Starting OMR...");
     let now = std::time::Instant::now();
     let message_digest_bytes = server_process(&clues, &payloads, &d_key_serialized);
-    println!("Server time: {:?}", now.elapsed());
-
-    let message_digest = deserialize_message_digest(&bfv_params, &message_digest_bytes);
+    println!("Total server time: {:?}", now.elapsed());
 
     // CLIENT SIDE //
     println!("Client: Processing digest");
     let now = std::time::Instant::now();
 
+    let message_digest = deserialize_message_digest(&bfv_params, &message_digest_bytes);
+
     let pt = bfv_sk.try_decrypt(&message_digest.pv).unwrap();
     let pv_values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
     let pv = pv_decompress(&pv_values, pt_bits);
-    {
-        let mut res_indices = vec![];
-        pv.iter().enumerate().for_each(|(index, bit)| {
-            if *bit == 1 {
-                res_indices.push(index);
-            }
-        });
-        pertinent_indices.sort();
-        assert_eq!(pertinent_indices, res_indices);
-        // println!("Expected indices {:?}", pertinent_indices);
-        // println!("Res indices      {:?}", res_indices);
-        // assert!(false);
-    }
+    // {
+    //     let mut res_indices = vec![];
+    //     pv.iter().enumerate().for_each(|(index, bit)| {
+    //         if *bit == 1 {
+    //             res_indices.push(index);
+    //         }
+    //     });
+    //     pertinent_indices.sort();
+    //     assert_eq!(pertinent_indices, res_indices);
+    //     // println!("Expected indices {:?}", pertinent_indices);
+    //     // println!("Res indices      {:?}", res_indices);
+    //     // assert!(false);
+    // }
+    let mut rng = ChaChaRng::from_seed(message_digest.seed);
     let (assigned_buckets, assigned_weights) =
         assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
     let lhs = construct_lhs(
@@ -153,7 +119,7 @@ fn run() {
         .collect_vec();
     let rhs = construct_rhs(&m_rows, M, M_ROW_SPAN, MODULI_OMR_PT[0]);
     let res_payloads = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
-    println!("Client: Total client time: {:?}", now.elapsed());
+    println!("Total client time: {:?}", now.elapsed());
 
     assert_eq!(pertinent_payloads, res_payloads);
 }

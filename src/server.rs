@@ -729,7 +729,7 @@ pub fn server_process(
 
     // phase 1
     println!("Phase 1...");
-    let now = std::time::Instant::now();
+    let mut now = std::time::Instant::now();
     let mut pertinency_cts = phase1(
         &bfv_params,
         &pvw_params,
@@ -749,6 +749,7 @@ pub fn server_process(
         assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
 
     println!("Phase 2...");
+    now = std::time::Instant::now();
     let (pv_ct, msg_cts) = phase2(
         &assigned_buckets,
         &assigned_weights,
@@ -836,10 +837,10 @@ mod tests {
 
         let msg_digest = server_process(&clues, &payloads, &d_key);
 
-        std::fs::File::create("target/message.bin")
-            .unwrap()
-            .write_all(&msg_digest)
-            .unwrap();
+        // std::fs::File::create("target/message.bin")
+        //     .unwrap()
+        //     .write_all(&msg_digest)
+        //     .unwrap();
     }
 
     #[test]

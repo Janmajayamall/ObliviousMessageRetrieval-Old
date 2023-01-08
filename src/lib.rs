@@ -5,18 +5,6 @@ pub mod utils;
 pub use fhe;
 pub use fhe_traits;
 
-use fhe::bfv::{BfvParametersBuilder, SecretKey};
-use pvw::PvwCiphertext;
-use rand::{thread_rng, Rng, SeedableRng};
-use rand_chacha::ChaChaRng;
-use server::DetectionKey;
-use std::sync::Arc;
-
-use crate::{
-    server::{phase1, phase2, MessageDigest},
-    utils::{assign_buckets, serialize_message_digest},
-};
-
 pub const MODULI_OMR: &[u64; 15] = &[
     268369921,
     549755486209,
@@ -36,7 +24,7 @@ pub const MODULI_OMR: &[u64; 15] = &[
 ];
 pub const DEGREE: usize = 1 << 11;
 pub const MODULI_OMR_PT: &[u64; 1] = &[65537];
-pub const SET_SIZE: usize = 2048;
+pub const SET_SIZE: usize = 1 << 14;
 pub const VARIANCE: usize = 10;
 
 // SRLC params
@@ -51,11 +39,3 @@ pub const GAMMA: usize = 5;
 // no of cts required to accomodate all
 // rows of buckets; = CEIL((M * M_ROW_SPACE) / DEGREE)
 pub const CT_SPAN_COUNT: usize = 7;
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        pvw::{PvwParameters, PvwSecretKey},
-        utils::{gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices},
-    };
-}

@@ -457,7 +457,6 @@ pub fn serialize_message_digest(digest: &MessageDigest) -> Vec<u8> {
 
     s.extend_from_slice(digest.seed.as_slice());
     s.extend_from_slice(digest.pv.to_bytes().as_slice());
-
     digest.msgs.iter().for_each(|c| {
         s.extend_from_slice(c.to_bytes().as_slice());
     });
@@ -467,7 +466,7 @@ pub fn serialize_message_digest(digest: &MessageDigest) -> Vec<u8> {
 
 pub fn deserialize_message_digest(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> MessageDigest {
     let ct_size = 14364;
-    let mut offset = 32;
+    let mut offset = 0;
 
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&bytes[..32]);
@@ -485,7 +484,7 @@ pub fn deserialize_message_digest(bfv_params: &Arc<BfvParameters>, bytes: &[u8])
     MessageDigest { seed, pv, msgs }
 }
 
-pub fn random_data(mut size_bits: usize) -> Vec<u64> {
+pub fn random_data(size_bits: usize) -> Vec<u64> {
     assert!(size_bits.is_power_of_two());
     let rng = thread_rng();
 
@@ -555,7 +554,7 @@ mod tests {
     use rand::{distributions::Uniform, thread_rng};
 
     #[test]
-    fn trial() {
+    fn range_coeffs() {
         precompute_range_coeffs();
     }
 
