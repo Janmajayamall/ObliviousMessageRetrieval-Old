@@ -7,8 +7,9 @@ use ndarray::{Array, Array1, Array2, Axis};
 use protobuf::Message;
 use rand::{
     distributions::{Distribution, Uniform},
-    CryptoRng, RngCore,
+    thread_rng, CryptoRng, RngCore, SeedableRng,
 };
+use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::Normal;
 mod proto;
@@ -80,6 +81,7 @@ impl From<&PvwCiphertext> for PvwCiphertextProto {
 pub struct PvwPublicKey {
     a: Array2<u64>,
     b: Array2<u64>,
+    seed: <ChaChaRng as SeedableRng>::Seed,
     par: Arc<PvwParameters>,
 }
 
@@ -135,15 +137,22 @@ impl PvwPublicKey {
 
     pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> PvwPublicKey {
         let from = PvwPublicKeyProto::parse_from_bytes(bytes).unwrap();
+
+        let seed = <ChaChaRng as SeedableRng>::Seed::try_from(from.seed).unwrap();
+        let mut rng = ChaChaRng::from_seed(seed);
+        let a = Modulus::new(par.q)
+            .unwrap()
+            .random_vec(par.n * par.m, &mut rng);
+
         let p_bits = 64 - (par.q - 1).leading_zeros() as usize;
-        let mut a = transcode_from_bytes(&from.a, p_bits);
         let mut b = transcode_from_bytes(&from.b, p_bits);
-        a.truncate(par.n * par.m);
         b.truncate(par.ell * par.m);
+
         PvwPublicKey {
             a: Array::from_shape_vec((par.n, par.m), a).unwrap(),
             b: Array::from_shape_vec((par.ell, par.m), b).unwrap(),
             par: par.clone(),
+            seed,
         }
     }
 }
@@ -152,15 +161,7 @@ impl From<&PvwPublicKey> for PvwPublicKeyProto {
     fn from(value: &PvwPublicKey) -> Self {
         let mut proto = PvwPublicKeyProto::new();
         let p_bits = 64 - (value.par.q - 1).leading_zeros() as usize;
-        proto.a = transcode_to_bytes(
-            value
-                .a
-                .outer_iter()
-                .flat_map(|n_m| n_m.to_vec())
-                .collect_vec()
-                .as_slice(),
-            p_bits,
-        );
+        proto.seed = value.seed.to_vec();
         proto.b = transcode_to_bytes(
             value
                 .b
@@ -201,9 +202,13 @@ impl PvwSecretKey {
     pub fn public_key<R: RngCore + CryptoRng>(&self, rng: &mut R) -> PvwPublicKey {
         let q = Modulus::new(self.par.q).unwrap();
 
+        let mut seed = <ChaChaRng as SeedableRng>::Seed::default();
+        thread_rng().fill_bytes(&mut seed);
+        let mut rng2 = ChaChaRng::from_seed(seed);
+
         let a = Array::from_shape_vec(
             (self.par.n, self.par.m),
-            q.random_vec(self.par.n * self.par.m, rng),
+            q.random_vec(self.par.n * self.par.m, &mut rng2),
         )
         .unwrap();
 
@@ -242,6 +247,7 @@ impl PvwSecretKey {
             a,
             b: ska,
             par: self.par.clone(),
+            seed,
         }
     }
 
@@ -404,6 +410,7 @@ mod tests {
 
         let pk = sk.public_key(&mut rng);
         let bytes = pk.to_bytes();
+        dbg!(bytes.len());
         let pk2 = PvwPublicKey::from_bytes(&bytes, &par);
 
         assert_eq!(pk.a, pk2.a);

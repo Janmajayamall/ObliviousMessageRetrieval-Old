@@ -10,6 +10,6 @@ message PvwCiphertext {
 }
 
 message PvwPublicKey { 
-    bytes a = 1;
+    bytes seed = 1;
     bytes b = 2;
 }
