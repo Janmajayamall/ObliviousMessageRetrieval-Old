@@ -327,10 +327,7 @@ pub fn gen_rlk_keys_levelled<R: CryptoRng + RngCore>(
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
     // for powers of x; range fn;
     for i in 1..11 {
-        keys.insert(
-            i,
-            RelinearizationKey::new_leveled(sk, i, i - 1, rng).unwrap(),
-        );
+        keys.insert(i, RelinearizationKey::new_leveled(sk, i, i, rng).unwrap());
     }
     keys
 }
@@ -376,8 +373,8 @@ pub fn gen_detection_key<R: CryptoRng + RngCore>(
         .build(rng)
         .unwrap();
     let rlk_keys = gen_rlk_keys_levelled(bfv_params, bfv_sk, rng);
-    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 10, 9, rng);
-    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 12, 11, rng);
+    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 10, 10, rng);
+    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 12, 12, rng);
     let pvw_sk_cts = gen_pvw_sk_cts(bfv_params, pvw_params, bfv_sk, pvw_sk, rng);
 
     assert!(pvw_sk_cts.len() == 4);
@@ -413,14 +410,14 @@ pub fn serialize_detection_key(key: &DetectionKey) -> Vec<u8> {
 pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> DetectionKey {
     // debug_assert!(bytes.len() == )
     let ek1 = EvaluationKey::from_bytes(&bytes[..3030031], bfv_params).unwrap();
-    let ek2 = EvaluationKey::from_bytes(&bytes[3030031..3816202], bfv_params).unwrap();
-    let ek3 = EvaluationKey::from_bytes(&bytes[3816202..5397013], bfv_params).unwrap();
+    let ek2 = EvaluationKey::from_bytes(&bytes[3030031..3662602], bfv_params).unwrap();
+    let ek3 = EvaluationKey::from_bytes(&bytes[3662602..4736533], bfv_params).unwrap();
 
     let mut pvw_sk_cts = [
-        Ciphertext::from_bytes(&bytes[5397013..5599046], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[5599046..5801079], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[5801079..6003112], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[6003112..6205145], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[4736533..4938566], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[4938566..5140599], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[5140599..5342632], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[5342632..5544665], bfv_params).unwrap(),
     ];
 
     let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
@@ -432,16 +429,16 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
             );
         };
     }
-    rlk!(1, 6205145..9033172);
-    rlk!(2, 9033172..11459522);
-    rlk!(3, 11459522..13607073);
-    rlk!(4, 13607073..15485552);
-    rlk!(5, 15485552..17039664);
-    rlk!(6, 17039664..18300129);
-    rlk!(7, 18300129..19297667);
-    rlk!(8, 19297667..20062998);
-    rlk!(9, 20062998..20626842);
-    rlk!(10, 20626842..21019919);
+    rlk!(1, 5544665..8157654);
+    rlk!(2, 8157654..10484164);
+    rlk!(3, 10484164..12533410);
+    rlk!(4, 12533410..14242929);
+    rlk!(5, 14242929..15643441);
+    rlk!(6, 15643441..16765666);
+    rlk!(7, 16765666..17640324);
+    rlk!(8, 17640324..18298135);
+    rlk!(9, 18298135..18769819);
+    rlk!(10, 18769819..19086096);
 
     DetectionKey {
         ek1,
@@ -673,8 +670,8 @@ mod tests {
     #[test]
     fn print_rlk_macro() {
         let r = vec![
-            3030031, 3816202, 5397013, 5599046, 5801079, 6003112, 6205145, 9033172, 11459522,
-            13607073, 15485552, 17039664, 18300129, 19297667, 20062998, 20626842, 21019919,
+            3030031, 3662602, 4736533, 4938566, 5140599, 5342632, 5544665, 8157654, 10484164,
+            12533410, 14242929, 15643441, 16765666, 17640324, 18298135, 18769819, 19086096,
         ];
         for i in (7..r.len()) {
             println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);

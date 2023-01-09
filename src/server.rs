@@ -297,7 +297,8 @@ pub fn range_fn(
         bfv_params,
     )
     .unwrap();
-    total = &(-total) + &one;
+    total = -total;
+    total += &one;
     // total.mod_switch_to_next_level();
 
     total
@@ -334,7 +335,7 @@ pub fn decrypt_pvw(
 
         for ell_index in 0..pvw_params.ell {
             let product = &ct_pvw_sk[ell_index] * &values_pt;
-            sk_a[ell_index] = &sk_a[ell_index] + &product;
+            sk_a[ell_index] += &product;
 
             // rotate left by 1
             ct_pvw_sk[ell_index] = rotation_key
@@ -342,9 +343,21 @@ pub fn decrypt_pvw(
                 .unwrap();
 
             // unsafe {
+            //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
             //     dbg!(sk.measure_noise(&sk_a[ell_index]));
             // }
         }
+    }
+
+    // for ell_index in 0..pvw_params.ell {
+    // unsafe {
+    //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
+    //     dbg!(sk.measure_noise(&sk_a[ell_index]));
+    // }
+    // }
+
+    for p in &mut sk_a {
+        *p = -&*p;
     }
 
     // sk_a = b - sk * a
@@ -362,7 +375,7 @@ pub fn decrypt_pvw(
         }
         let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
 
-        sk_a[ell_index] = &(-&sk_a[ell_index]) + &b_ell;
+        sk_a[ell_index] += &b_ell;
     }
 
     // reduce noise of cts in d
@@ -400,9 +413,9 @@ pub fn pv_unpack(
         if i != 0 {
             if i == (bfv_params.degree() / 2) {
                 // rotate rows when offset is halfway
-                *pv_ct = rot_keys.rotates_rows(&pv_ct).unwrap();
+                *pv_ct = rot_keys.rotates_rows(pv_ct).unwrap();
             }
-            *pv_ct = rot_keys.rotates_columns_by(&pv_ct, 1).unwrap();
+            *pv_ct = rot_keys.rotates_columns_by(pv_ct, 1).unwrap();
         }
 
         let mut value_vec = &*pv_ct * &select_pt;
@@ -555,6 +568,7 @@ pub fn phase1(
         .par_chunks(degree)
         .map(|c| {
             // level 0
+            // let mut now = std::time::Instant::now();
             let decrypted_clues = decrypt_pvw(
                 bfv_params,
                 pvw_params,
@@ -563,17 +577,22 @@ pub fn phase1(
                 c,
                 sk,
             );
-            assert!(decrypted_clues.len() == pvw_params.ell);
+            // println!("Decrypt_pvw_time {:?}", now.elapsed());
+            // assert!(decrypted_clues.len() == pvw_params.ell);
 
             // level 1; decryption consumes 1
+            // now = std::time::Instant::now();
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
                 .map(|d| range_fn(bfv_params, d, rlk_keys, 1, "params_850.bin", sk))
                 .collect_vec();
+            // println!("range time {:?}", now.elapsed());
 
             // level 9; range fn consumes 8
+            // now = std::time::Instant::now();
             mul_many(&mut ranged_decrypted_clues, rlk_keys, 9);
-            assert!(ranged_decrypted_clues.len() == 1);
+            // println!("mul_many time {:?}", now.elapsed());
+            // assert!(ranged_decrypted_clues.len() == 1);
             // level 10; mul_many consumes 1
             ranged_decrypted_clues[0].clone()
         })
@@ -608,6 +627,12 @@ pub fn phase2(
     debug_assert!(degree % batch_size == 0);
     // debug_assert!(set_size == degree * pertinency_cts.len()); // TODO: relax this from == to <=
 
+    // unsafe {
+    //     pertinency_cts.iter().for_each(|p| {
+    //         dbg!(sk.measure_noise(p));
+    //     })
+    // }
+
     let (mut pertinency_vectors, mut rhs): (Vec<Ciphertext>, Vec<Vec<Ciphertext>>) = pertinency_cts
         .par_iter_mut()
         .enumerate()
@@ -632,6 +657,10 @@ pub fn phase2(
                     sk,
                     level,
                 );
+
+                // unsafe {
+                //     dbg!(sk.measure_noise(&unpacked_cts[0]));
+                // }
 
                 // level 12; unpacking consumes 2 levels
                 pv_compress(
@@ -666,25 +695,30 @@ pub fn phase2(
         })
         .collect();
 
-    for i in 1..pertinency_vectors.len() {
-        pertinency_vectors[0] = &pertinency_vectors[0] + &pertinency_vectors[i];
-    }
-
-    for i in 1..rhs.len() {
-        for j in 0..ct_span_count {
-            rhs[0][j] = &rhs[0][j] + &rhs[i][j];
-        }
-    }
+    let mut pv = Ciphertext::zero(bfv_params);
+    pertinency_vectors.iter().for_each(|p| {
+        pv += p;
+    });
+    let mut rhs_total = vec![Ciphertext::zero(bfv_params); ct_span_count];
+    rhs.iter().for_each(|r| {
+        izip!(rhs_total.iter_mut(), r.iter()).for_each(|(rt, r)| {
+            *rt += r;
+        });
+    });
 
     // unsafe {
     //     println!(
-    //         "noise in pv before mod switch {}",
+    //         "noise in pertinency_vectors[0] {}",
     //         sk.measure_noise(&pertinency_vectors[0]).unwrap()
     //     );
-    //     let mut p1 = pertinency_vectors[0].clone();
+    //     println!(
+    //         "noise in pv before mod switch {}",
+    //         sk.measure_noise(&pv).unwrap()
+    //     );
+    //     let mut p1 = pv.clone();
     //     p1.mod_switch_to_next_level();
 
-    //     let mut p2 = pertinency_vectors[0].clone();
+    //     let mut p2 = pv.clone();
     //     p2.mod_switch_to_last_level();
     //     println!(
     //         "noise in pv after mod switch by 1 {}",
@@ -696,12 +730,12 @@ pub fn phase2(
     //     );
     // }
 
-    pertinency_vectors[0].mod_switch_to_last_level();
-    for r in &mut rhs[0] {
+    pv.mod_switch_to_last_level();
+    for r in &mut rhs_total {
         r.mod_switch_to_last_level();
     }
 
-    (pertinency_vectors[0].clone(), rhs[0].clone())
+    (pv, rhs_total)
 }
 
 pub fn server_process(
@@ -850,6 +884,7 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
                 .set_moduli(MODULI_OMR)
+                // .set_moduli_sizes(&[28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 .build()
                 .unwrap(),
@@ -929,27 +964,25 @@ mod tests {
         /// CLIENT SIDE
         assert_eq!(res_rhs.len(), ct_span_count);
 
-        // {
-        //     // Checking ct encoding pv is correct (i.e. Phase 1)
-        //     let decompressed_pv = pv_decompress(&bfv_params, &res_pv, &bfv_sk);
-
-        //     let mut res_indices = vec![];
-        //     decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
-        //         if *bit == 1 {
-        //             res_indices.push(index);
-        //         }
-        //     });
-        //     println!("Expected indices {:?}", pertinent_indices);
-        //     println!("Res indices      {:?}", res_indices);
-        //     // assert!(false);
-        // }
-
         let pt = bfv_sk.try_decrypt(&res_pv).unwrap();
         let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
         let decompressed_pv = pv_decompress(
             &values,
             (64 - bfv_params.plaintext().leading_zeros() - 1) as usize,
         );
+
+        {
+            let mut res_indices = vec![];
+            decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
+                if *bit == 1 {
+                    res_indices.push(index);
+                }
+            });
+            // println!("Expected indices {:?}", pertinent_indices);
+            // println!("Res indices      {:?}", res_indices);
+            assert_eq!(pertinent_indices, res_indices);
+        }
+
         let lhs = construct_lhs(
             &decompressed_pv,
             assigned_buckets,

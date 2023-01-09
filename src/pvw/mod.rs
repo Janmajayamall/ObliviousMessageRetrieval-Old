@@ -29,7 +29,7 @@ pub struct PvwParameters {
 impl Default for PvwParameters {
     fn default() -> Self {
         Self {
-            n: 5,
+            n: 450,
             m: 16000,
             ell: 4,
             variance: 1.3,
@@ -319,7 +319,6 @@ impl From<&PvwSecretKey> for PvwSecretKeyProto {
 mod tests {
 
     use super::*;
-    use fhe::bfv::SecretKey;
     use rand::thread_rng;
 
     #[test]
@@ -380,8 +379,8 @@ mod tests {
         let sk = PvwSecretKey::random(&par, &mut rng);
         let pk = sk.public_key(&mut rng);
         let ct = pk.encrypt(&[0, 1, 0, 1], &mut rng);
-
         let ct_bytes = ct.clone().to_bytes();
+        dbg!(ct_bytes.len());
         let ct2 = PvwCiphertext::from_bytes(&ct_bytes, &par).unwrap();
         assert_eq!(&ct.a, &ct2.a);
         assert_eq!(ct.b, ct2.b);
