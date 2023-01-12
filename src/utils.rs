@@ -1,6 +1,7 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use fhe::bfv::{
-    BfvParameters, Ciphertext, EvaluationKey, EvaluationKeyBuilder, RelinearizationKey, SecretKey,
+    BfvParameters, Ciphertext, EvaluationKey, EvaluationKeyBuilder, PublicKey, RelinearizationKey,
+    SecretKey,
 };
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
@@ -375,7 +376,8 @@ pub fn gen_detection_key<R: CryptoRng + RngCore>(
     let rlk_keys = gen_rlk_keys_levelled(bfv_params, bfv_sk, rng);
     let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 10, 10, rng);
     let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 12, 12, rng);
-    let pvw_sk_cts = gen_pvw_sk_cts(bfv_params, pvw_params, bfv_sk, pvw_sk, rng);
+    let pk = PublicKey::new(&bfv_sk, rng);
+    let pvw_sk_cts = gen_pvw_sk_cts(bfv_params, pvw_params, &pk, pvw_sk, rng);
 
     assert!(pvw_sk_cts.len() == 4);
 

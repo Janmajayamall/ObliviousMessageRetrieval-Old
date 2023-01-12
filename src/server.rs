@@ -4,10 +4,9 @@ use crate::utils::{
     serialize_message_digest,
 };
 use crate::{CT_SPAN_COUNT, DEGREE, GAMMA, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE};
-use bincode::config::RejectTrailing;
 use fhe::bfv::{
-    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Multiplicator,
-    Plaintext, RelinearizationKey, SecretKey,
+    self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Plaintext,
+    RelinearizationKey, SecretKey,
 };
 use fhe_math::zq::Modulus;
 use fhe_traits::FheEncoder;
@@ -824,7 +823,7 @@ mod tests {
         solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
-    use fhe::bfv::EvaluationKeyBuilder;
+    use fhe::bfv::{EvaluationKeyBuilder, PublicKey};
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
     use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter, Serialize};
@@ -1033,6 +1032,7 @@ mod tests {
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+        let bfv_pk = PublicKey::new(&bfv_sk, &mut rng);
 
         let pvw_params = Arc::new(PvwParameters {
             n: 450,
@@ -1044,7 +1044,7 @@ mod tests {
         let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
         let pvw_pk = pvw_sk.public_key(&mut rng);
 
-        let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+        let pvw_sk_cts = gen_pvw_sk_cts(&bfv_params, &pvw_params, &bfv_pk, &pvw_sk, &mut rng);
 
         // encrypt values
         let mut clues = vec![];

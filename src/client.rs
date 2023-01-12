@@ -1,5 +1,5 @@
 use crate::pvw::{PvwParameters, PvwSecretKey};
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, SecretKey};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, SecretKey};
 
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use itertools::Itertools;
@@ -10,7 +10,7 @@ use std::vec;
 pub fn gen_pvw_sk_cts<R: RngCore + CryptoRng>(
     bfv_params: &Arc<BfvParameters>,
     pvw_params: &Arc<PvwParameters>,
-    bfv_sk: &SecretKey,
+    bfv_pk: &PublicKey,
     pvw_sk: &PvwSecretKey,
     rng: &mut R,
 ) -> Vec<Ciphertext> {
@@ -30,7 +30,7 @@ pub fn gen_pvw_sk_cts<R: RngCore + CryptoRng>(
                 }
             }
             let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
-            bfv_sk.try_encrypt(&values_pt, rng).unwrap()
+            bfv_pk.try_encrypt(&values_pt, rng).unwrap()
         })
         .collect_vec()
 }
