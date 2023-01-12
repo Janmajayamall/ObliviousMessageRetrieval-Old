@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use fhe_math::zq::Modulus;
 use fhe_util::{transcode_from_bytes, transcode_to_bytes};
 use itertools::{izip, Itertools};
@@ -12,6 +10,7 @@ use rand::{
 use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
 use statrs::distribution::Normal;
+use std::sync::Arc;
 mod proto;
 use proto::pvw::{
     PvwCiphertext as PvwCiphertextProto, PvwPublicKey as PvwPublicKeyProto,
@@ -55,10 +54,9 @@ impl PvwCiphertext {
     pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> Option<PvwCiphertext> {
         let from = PvwCiphertextProto::parse_from_bytes(bytes).unwrap();
         let p_bits = (64 - (par.q - 1).leading_zeros()) as usize;
-        let mut a = transcode_from_bytes(&from.a, p_bits);
-        let mut b = transcode_from_bytes(&from.b, p_bits);
-        a.truncate(par.n);
-        b.truncate(par.ell);
+        let v = transcode_from_bytes(&from.v, p_bits);
+        let b = v[..par.ell].to_vec();
+        let a = v[par.ell..(par.ell + par.n)].to_vec();
 
         Some(PvwCiphertext {
             par: par.clone(),
@@ -72,8 +70,8 @@ impl From<&PvwCiphertext> for PvwCiphertextProto {
     fn from(value: &PvwCiphertext) -> Self {
         let mut proto = PvwCiphertextProto::new();
         let p_bits = (64 - (value.par.q - 1).leading_zeros()) as usize;
-        proto.a = transcode_to_bytes(&value.a, p_bits);
-        proto.b = transcode_to_bytes(&value.b, p_bits);
+        let v = [value.b.clone(), value.a.clone()].concat();
+        proto.v = transcode_to_bytes(&v, p_bits);
         proto
     }
 }

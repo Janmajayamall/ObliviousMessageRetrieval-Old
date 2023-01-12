@@ -75,6 +75,11 @@ fn run() {
     let message_digest_bytes = server_process(&clues, &payloads, &d_key_serialized);
     println!("Total server time: {:?}", now.elapsed());
 
+    println!(
+        "Message digest size: {}",
+        (message_digest_bytes.len() as f64 / 1000000.0)
+    );
+
     // CLIENT SIDE //
     println!("Client: Processing digest");
     let now = std::time::Instant::now();

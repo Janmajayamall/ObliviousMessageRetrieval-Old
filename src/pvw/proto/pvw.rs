@@ -151,10 +151,8 @@ impl ::protobuf::reflect::ProtobufValue for PvwSecretKey {
 // @@protoc_insertion_point(message:PvwCiphertext)
 pub struct PvwCiphertext {
     // message fields
-    // @@protoc_insertion_point(field:PvwCiphertext.a)
-    pub a: ::std::vec::Vec<u8>,
-    // @@protoc_insertion_point(field:PvwCiphertext.b)
-    pub b: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:PvwCiphertext.v)
+    pub v: ::std::vec::Vec<u8>,
     // special fields
     // @@protoc_insertion_point(special_field:PvwCiphertext.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -172,17 +170,12 @@ impl PvwCiphertext {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut fields = ::std::vec::Vec::with_capacity(1);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "a",
-            |m: &PvwCiphertext| { &m.a },
-            |m: &mut PvwCiphertext| { &mut m.a },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "b",
-            |m: &PvwCiphertext| { &m.b },
-            |m: &mut PvwCiphertext| { &mut m.b },
+            "v",
+            |m: &PvwCiphertext| { &m.v },
+            |m: &mut PvwCiphertext| { &mut m.v },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PvwCiphertext>(
             "PvwCiphertext",
@@ -203,10 +196,7 @@ impl ::protobuf::Message for PvwCiphertext {
         while let Some(tag) = is.read_raw_tag_or_eof()? {
             match tag {
                 10 => {
-                    self.a = is.read_bytes()?;
-                },
-                18 => {
-                    self.b = is.read_bytes()?;
+                    self.v = is.read_bytes()?;
                 },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
@@ -220,11 +210,8 @@ impl ::protobuf::Message for PvwCiphertext {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u64 {
         let mut my_size = 0;
-        if !self.a.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(1, &self.a);
-        }
-        if !self.b.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(2, &self.b);
+        if !self.v.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(1, &self.v);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
@@ -232,11 +219,8 @@ impl ::protobuf::Message for PvwCiphertext {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
-        if !self.a.is_empty() {
-            os.write_bytes(1, &self.a)?;
-        }
-        if !self.b.is_empty() {
-            os.write_bytes(2, &self.b)?;
+        if !self.v.is_empty() {
+            os.write_bytes(1, &self.v)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -255,15 +239,13 @@ impl ::protobuf::Message for PvwCiphertext {
     }
 
     fn clear(&mut self) {
-        self.a.clear();
-        self.b.clear();
+        self.v.clear();
         self.special_fields.clear();
     }
 
     fn default_instance() -> &'static PvwCiphertext {
         static instance: PvwCiphertext = PvwCiphertext {
-            a: ::std::vec::Vec::new(),
-            b: ::std::vec::Vec::new(),
+            v: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -429,28 +411,24 @@ impl ::protobuf::reflect::ProtobufValue for PvwPublicKey {
 
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\tpvw.proto\"\x20\n\x0cPvwSecretKey\x12\x10\n\x03key\x18\x01\x20\x01(\
-    \x0cR\x03key\"+\n\rPvwCiphertext\x12\x0c\n\x01a\x18\x01\x20\x01(\x0cR\
-    \x01a\x12\x0c\n\x01b\x18\x02\x20\x01(\x0cR\x01b\"0\n\x0cPvwPublicKey\x12\
-    \x12\n\x04seed\x18\x01\x20\x01(\x0cR\x04seed\x12\x0c\n\x01b\x18\x02\x20\
-    \x01(\x0cR\x01bJ\xed\x02\n\x06\x12\x04\0\0\x0e\x01\n\x08\n\x01\x0c\x12\
-    \x03\0\0\x12\n\n\n\x02\x04\0\x12\x04\x02\0\x04\x01\n\n\n\x03\x04\0\x01\
-    \x12\x03\x02\x08\x14\n\x0b\n\x04\x04\0\x02\0\x12\x03\x03\x04\x12\n\x0c\n\
-    \x05\x04\0\x02\0\x05\x12\x03\x03\x04\t\n\x0c\n\x05\x04\0\x02\0\x01\x12\
-    \x03\x03\n\r\n\x0c\n\x05\x04\0\x02\0\x03\x12\x03\x03\x10\x11\n\n\n\x02\
-    \x04\x01\x12\x04\x06\0\t\x01\n\n\n\x03\x04\x01\x01\x12\x03\x06\x08\x15\n\
-    \x0b\n\x04\x04\x01\x02\0\x12\x03\x07\x04\x10\n\x0c\n\x05\x04\x01\x02\0\
-    \x05\x12\x03\x07\x04\t\n\x0c\n\x05\x04\x01\x02\0\x01\x12\x03\x07\n\x0b\n\
-    \x0c\n\x05\x04\x01\x02\0\x03\x12\x03\x07\x0e\x0f\n\x0b\n\x04\x04\x01\x02\
-    \x01\x12\x03\x08\x04\x10\n\x0c\n\x05\x04\x01\x02\x01\x05\x12\x03\x08\x04\
-    \t\n\x0c\n\x05\x04\x01\x02\x01\x01\x12\x03\x08\n\x0b\n\x0c\n\x05\x04\x01\
-    \x02\x01\x03\x12\x03\x08\x0e\x0f\n\n\n\x02\x04\x02\x12\x04\x0b\0\x0e\x01\
-    \n\n\n\x03\x04\x02\x01\x12\x03\x0b\x08\x14\n\x0b\n\x04\x04\x02\x02\0\x12\
-    \x03\x0c\x04\x13\n\x0c\n\x05\x04\x02\x02\0\x05\x12\x03\x0c\x04\t\n\x0c\n\
-    \x05\x04\x02\x02\0\x01\x12\x03\x0c\n\x0e\n\x0c\n\x05\x04\x02\x02\0\x03\
-    \x12\x03\x0c\x11\x12\n\x0b\n\x04\x04\x02\x02\x01\x12\x03\r\x04\x10\n\x0c\
-    \n\x05\x04\x02\x02\x01\x05\x12\x03\r\x04\t\n\x0c\n\x05\x04\x02\x02\x01\
-    \x01\x12\x03\r\n\x0b\n\x0c\n\x05\x04\x02\x02\x01\x03\x12\x03\r\x0e\x0fb\
-    \x06proto3\
+    \x0cR\x03key\"\x1d\n\rPvwCiphertext\x12\x0c\n\x01v\x18\x01\x20\x01(\x0cR\
+    \x01v\"0\n\x0cPvwPublicKey\x12\x12\n\x04seed\x18\x01\x20\x01(\x0cR\x04se\
+    ed\x12\x0c\n\x01b\x18\x02\x20\x01(\x0cR\x01bJ\xb6\x02\n\x06\x12\x04\0\0\
+    \r\x01\n\x08\n\x01\x0c\x12\x03\0\0\x12\n\n\n\x02\x04\0\x12\x04\x02\0\x04\
+    \x01\n\n\n\x03\x04\0\x01\x12\x03\x02\x08\x14\n\x0b\n\x04\x04\0\x02\0\x12\
+    \x03\x03\x04\x12\n\x0c\n\x05\x04\0\x02\0\x05\x12\x03\x03\x04\t\n\x0c\n\
+    \x05\x04\0\x02\0\x01\x12\x03\x03\n\r\n\x0c\n\x05\x04\0\x02\0\x03\x12\x03\
+    \x03\x10\x11\n\n\n\x02\x04\x01\x12\x04\x06\0\x08\x01\n\n\n\x03\x04\x01\
+    \x01\x12\x03\x06\x08\x15\n\x0b\n\x04\x04\x01\x02\0\x12\x03\x07\x04\x10\n\
+    \x0c\n\x05\x04\x01\x02\0\x05\x12\x03\x07\x04\t\n\x0c\n\x05\x04\x01\x02\0\
+    \x01\x12\x03\x07\n\x0b\n\x0c\n\x05\x04\x01\x02\0\x03\x12\x03\x07\x0e\x0f\
+    \n\n\n\x02\x04\x02\x12\x04\n\0\r\x01\n\n\n\x03\x04\x02\x01\x12\x03\n\x08\
+    \x14\n\x0b\n\x04\x04\x02\x02\0\x12\x03\x0b\x04\x13\n\x0c\n\x05\x04\x02\
+    \x02\0\x05\x12\x03\x0b\x04\t\n\x0c\n\x05\x04\x02\x02\0\x01\x12\x03\x0b\n\
+    \x0e\n\x0c\n\x05\x04\x02\x02\0\x03\x12\x03\x0b\x11\x12\n\x0b\n\x04\x04\
+    \x02\x02\x01\x12\x03\x0c\x04\x10\n\x0c\n\x05\x04\x02\x02\x01\x05\x12\x03\
+    \x0c\x04\t\n\x0c\n\x05\x04\x02\x02\x01\x01\x12\x03\x0c\n\x0b\n\x0c\n\x05\
+    \x04\x02\x02\x01\x03\x12\x03\x0c\x0e\x0fb\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

@@ -5,8 +5,7 @@ message PvwSecretKey {
 } 
 
 message PvwCiphertext { 
-    bytes a = 1;
-    bytes b = 2;
+    bytes v = 1;
 }
 
 message PvwPublicKey { 
