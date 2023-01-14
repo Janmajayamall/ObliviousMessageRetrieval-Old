@@ -195,12 +195,12 @@ pub fn range_fn(
     params_path: &str,
     sk: &SecretKey,
 ) -> Ciphertext {
-    // let mut now = std::time::SystemTime::now();
+    let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level `level_offset` + 4
     let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, level_offset);
-    // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
+    println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
-    // now = std::time::SystemTime::now();
+    now = std::time::SystemTime::now();
     // m = x^256
     // all k_powers_of_m are at level `level_offset` + 8
     let k_powers_of_m = powers_of_x(
@@ -334,13 +334,19 @@ pub fn decrypt_pvw(
         let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
 
         for ell_index in 0..pvw_params.ell {
+            // let mut now = std::time::Instant::now();
             let product = &ct_pvw_sk[ell_index] * &values_pt;
+            // println!("&ct_pvw_sk[ell_index] * &values_pt: {:?}", now.elapsed());
+            // now = std::time::Instant::now();
             sk_a[ell_index] += &product;
+            // println!("sk_a[ell_index] += &product;: {:?}", now.elapsed());
 
             // rotate left by 1
+            // now = std::time::Instant::now();
             ct_pvw_sk[ell_index] = rotation_key
                 .rotates_columns_by(&ct_pvw_sk[ell_index], 1)
                 .unwrap();
+            // println!("ct_pvw_sk[ell_index] rotate l by 1: {:?}", now.elapsed());
 
             // unsafe {
             //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
@@ -356,9 +362,11 @@ pub fn decrypt_pvw(
     // }
     // }
 
+    // let mut now = std::time::Instant::now();
     for p in &mut sk_a {
         *p = -&*p;
     }
+    // println!("neg sk_a: {:?}", now.elapsed());
 
     // sk_a = b - sk * a
     let q = Modulus::new(pvw_params.q).unwrap();
@@ -375,12 +383,16 @@ pub fn decrypt_pvw(
         }
         let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
 
+        // now = std::time::Instant::now();
         sk_a[ell_index] += &b_ell;
+        // println!("sk_a[ell_index] += &b_ell: {:?}", now.elapsed());
     }
 
     // reduce noise of cts in d
     for v in &mut sk_a {
+        // now = std::time::Instant::now();
         v.mod_switch_to_next_level();
+        // println!("v.mod_switch_to_next_level(): {:?}", now.elapsed());
     }
 
     sk_a
@@ -568,7 +580,7 @@ pub fn phase1(
         .par_chunks(degree)
         .map(|c| {
             // level 0
-            // let mut now = std::time::Instant::now();
+            let mut now = std::time::Instant::now();
             let decrypted_clues = decrypt_pvw(
                 bfv_params,
                 pvw_params,
@@ -577,21 +589,21 @@ pub fn phase1(
                 c,
                 sk,
             );
-            // println!("Decrypt_pvw_time {:?}", now.elapsed());
+            println!("Decrypt_pvw_time {:?}", now.elapsed());
             // assert!(decrypted_clues.len() == pvw_params.ell);
 
             // level 1; decryption consumes 1
-            // now = std::time::Instant::now();
+            now = std::time::Instant::now();
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
                 .map(|d| range_fn(bfv_params, d, rlk_keys, 1, "params_850.bin", sk))
                 .collect_vec();
-            // println!("range time {:?}", now.elapsed());
+            println!("range time {:?}", now.elapsed());
 
             // level 9; range fn consumes 8
-            // now = std::time::Instant::now();
+            now = std::time::Instant::now();
             mul_many(&mut ranged_decrypted_clues, rlk_keys, 9);
-            // println!("mul_many time {:?}", now.elapsed());
+            println!("mul_many time {:?}", now.elapsed());
             // assert!(ranged_decrypted_clues.len() == 1);
             // level 10; mul_many consumes 1
             ranged_decrypted_clues[0].clone()
@@ -629,7 +641,7 @@ pub fn phase2(
 
     // unsafe {
     //     pertinency_cts.iter().for_each(|p| {
-    //         dbg!(sk.measure_noise(p));
+    //         println!("Phase2: pertinency_cts {}", sk.measure_noise(p).unwrap());
     //     })
     // }
 
@@ -645,7 +657,7 @@ pub fn phase2(
 
             let mut rhs = vec![Ciphertext::zero(bfv_params); ct_span_count];
 
-            for _ in 0..degree / batch_size {
+            for i in 0..degree / batch_size {
                 // level 10
                 let unpacked_cts = pv_unpack(
                     bfv_params,
@@ -658,8 +670,13 @@ pub fn phase2(
                     level,
                 );
 
-                // unsafe {
-                //     dbg!(sk.measure_noise(&unpacked_cts[0]));
+                // if core_index == 0 {
+                //     unsafe {
+                //         println!(
+                //             "Phase2: post unpack {}",
+                //             sk.measure_noise(&unpacked_cts[0]).unwrap()
+                //         );
+                //     }
                 // }
 
                 // level 12; unpacking consumes 2 levels
@@ -931,7 +948,7 @@ mod tests {
             &d_ky.ek1,
             &d_ky.rlk_keys,
             &clues,
-            &dummy_sk,
+            &bfv_sk,
         );
         let phase1_time = now.elapsed();
 
@@ -952,7 +969,7 @@ mod tests {
             ct_span_count,
             m,
             payload_size,
-            &dummy_sk,
+            &bfv_sk,
         );
         let end_time = now.elapsed();
         println!(
@@ -1028,7 +1045,7 @@ mod tests {
                 // .set_moduli_sizes(&vec![
                 //     28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60,
                 // ])
-                .set_moduli(MODULI_OMR)
+                // .set_moduli(MODULI_OMR)
                 .build()
                 .unwrap(),
         );
