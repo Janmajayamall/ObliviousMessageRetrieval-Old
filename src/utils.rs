@@ -1,6 +1,7 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use fhe::bfv::{
-    BfvParameters, Ciphertext, EvaluationKey, EvaluationKeyBuilder, RelinearizationKey, SecretKey,
+    BfvParameters, Ciphertext, EvaluationKey, EvaluationKeyBuilder, Multiplicator,
+    RelinearizationKey, SecretKey,
 };
 use fhe_math::{
     rq::{traits::TryConvertFrom, Context, Poly, Representation},
@@ -317,6 +318,16 @@ pub fn gen_rlk_keys(
     // println!("RLK gen took {:?}", now.elapsed().unwrap());
 
     keys
+}
+
+pub fn map_rlks_to_multiplicators(
+    rlk_keys: &HashMap<usize, RelinearizationKey>,
+) -> HashMap<usize, Multiplicator> {
+    let mut muls = HashMap::default();
+    rlk_keys.iter().for_each(|(level, rlk)| {
+        muls.insert(*level, Multiplicator::default(rlk).unwrap());
+    });
+    muls
 }
 
 pub fn gen_rlk_keys_levelled<R: CryptoRng + RngCore>(

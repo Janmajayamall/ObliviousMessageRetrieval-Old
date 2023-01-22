@@ -52,7 +52,7 @@ fn run() {
     // pvw secret key encrypted under bfv
     println!("Generating client keys");
     let d_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-    let d_key_serialized = serialize_detection_key(&d_key);
+    let multiplicators = map_rlks_to_multiplicators(&d_key.rlk_keys);
 
     let mut pertinent_indices = gen_pertinent_indices(50, SET_SIZE);
     pertinent_indices.sort();
@@ -72,19 +72,12 @@ fn run() {
     // SERVER SIDE //
     println!("Server: Starting OMR...");
     let now = std::time::Instant::now();
-    let message_digest_bytes = server_process(&clues, &payloads, &d_key_serialized);
+    let message_digest = server_process(&bfv_params, &clues, &payloads, &d_key, &multiplicators);
     println!("Total server time: {:?}", now.elapsed());
-
-    println!(
-        "Message digest size: {}",
-        (message_digest_bytes.len() as f64 / 1000000.0)
-    );
 
     // CLIENT SIDE //
     println!("Client: Processing digest");
     let now = std::time::Instant::now();
-
-    let message_digest = deserialize_message_digest(&bfv_params, &message_digest_bytes);
 
     let pt = bfv_sk.try_decrypt(&message_digest.pv).unwrap();
     let pv_values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();

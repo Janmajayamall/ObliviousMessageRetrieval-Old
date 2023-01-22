@@ -16,6 +16,7 @@ use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::ops::Mul;
 use std::sync::Arc;
 use std::vec;
 
@@ -49,7 +50,7 @@ pub fn default_pvw() -> PvwParameters {
 
 pub fn mul_many(
     values: &mut Vec<Ciphertext>,
-    rlk_keys: &HashMap<usize, RelinearizationKey>,
+    multiplicators: &HashMap<usize, Multiplicator>,
     mut level_offset: usize,
 ) {
     let mut counter = 0usize;
@@ -57,11 +58,10 @@ pub fn mul_many(
         let mut mid = values.len() / 2;
 
         for i in 0..mid {
-            values[i] = &values[i] * &values[mid + i];
-            rlk_keys
+            values[i] = multiplicators
                 .get(&level_offset)
                 .unwrap()
-                .relinearizes(&mut values[i])
+                .multiply(&values[i], &values[mid + i])
                 .unwrap();
         }
 
@@ -85,7 +85,7 @@ pub fn powers_of_x(
     input: &Ciphertext,
     degree: usize,
     params: &Arc<BfvParameters>,
-    rlk_keys: &HashMap<usize, RelinearizationKey>,
+    multiplicators: &HashMap<usize, Multiplicator>,
     mod_offset: usize,
 ) -> Vec<Ciphertext> {
     let mut outputs = vec![Ciphertext::zero(&params); degree];
@@ -119,10 +119,11 @@ pub fn powers_of_x(
                             res.mod_switch_to_next_level();
                             num_mod[res_deg - 1] += 1;
                         }
-                        res = &res * &base;
-                        let rlk_level =
-                            rlk_keys.get(&(num_mod[base_deg - 1] + mod_offset)).unwrap();
-                        rlk_level.relinearizes(&mut res).unwrap();
+                        res = multiplicators
+                            .get(&(num_mod[base_deg - 1] + mod_offset))
+                            .unwrap()
+                            .multiply(&res, &base)
+                            .unwrap();
 
                         // now = std::time::SystemTime::now();
                         while num_mod[res_deg - 1]
@@ -148,10 +149,12 @@ pub fn powers_of_x(
                     base = outputs[base_deg - 1].clone();
                 } else {
                     num_mod[base_deg - 1] = num_mod[base_deg / 2 - 1];
-                    base = &base * &base;
 
-                    let rlk_level = rlk_keys.get(&(num_mod[base_deg - 1] + mod_offset)).unwrap();
-                    rlk_level.relinearizes(&mut base).unwrap();
+                    base = multiplicators
+                        .get(&(num_mod[base_deg - 1] + mod_offset))
+                        .unwrap()
+                        .multiply(&base, &base)
+                        .unwrap();
 
                     while num_mod[base_deg - 1] < ((base_deg as f32).log2() / 2f32).ceil() as usize
                     {
@@ -189,15 +192,14 @@ pub fn powers_of_x(
 pub fn range_fn(
     bfv_params: &Arc<BfvParameters>,
     input: &Ciphertext,
-    rlk_keys: &HashMap<usize, RelinearizationKey>,
-
+    multiplicators: &HashMap<usize, Multiplicator>,
     level_offset: usize,
     params_path: &str,
     sk: &SecretKey,
 ) -> Ciphertext {
     let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level `level_offset` + 4
-    let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, rlk_keys, level_offset);
+    let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, multiplicators, level_offset);
     println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
     now = std::time::SystemTime::now();
@@ -207,7 +209,7 @@ pub fn range_fn(
         &k_powers_of_x[255],
         256,
         bfv_params,
-        rlk_keys,
+        multiplicators,
         level_offset + 4,
     );
     // println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
@@ -277,9 +279,11 @@ pub fn range_fn(
         // now = std::time::SystemTime::now();
         if i != 0 {
             // mul and add
-            let mut p = &k_powers_of_m[i - 1] * &sum;
-            let rlk = rlk_keys.get(&(level_offset + 8)).unwrap();
-            rlk.relinearizes(&mut p).unwrap();
+            let mut p = multiplicators
+                .get(&(level_offset + 8))
+                .unwrap()
+                .multiply(&k_powers_of_m[i - 1], &sum)
+                .unwrap();
 
             total += &p
         } else {
@@ -567,7 +571,7 @@ pub fn phase1(
     pvw_params: &PvwParameters,
     ct_pvw_sk: &[Ciphertext],
     rotation_key: &EvaluationKey,
-    rlk_keys: &HashMap<usize, RelinearizationKey>,
+    multiplicators: &HashMap<usize, Multiplicator>,
     clues: &[PvwCiphertext],
     sk: &SecretKey,
 ) -> Vec<Ciphertext> {
@@ -596,13 +600,13 @@ pub fn phase1(
             now = std::time::Instant::now();
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
-                .map(|d| range_fn(bfv_params, d, rlk_keys, 1, "params_850.bin", sk))
+                .map(|d| range_fn(bfv_params, d, multiplicators, 1, "params_850.bin", sk))
                 .collect_vec();
             println!("range time {:?}", now.elapsed());
 
             // level 9; range fn consumes 8
             now = std::time::Instant::now();
-            mul_many(&mut ranged_decrypted_clues, rlk_keys, 9);
+            mul_many(&mut ranged_decrypted_clues, multiplicators, 9);
             println!("mul_many time {:?}", now.elapsed());
             // assert!(ranged_decrypted_clues.len() == 1);
             // level 10; mul_many consumes 1
@@ -756,23 +760,15 @@ pub fn phase2(
 }
 
 pub fn server_process(
+    bfv_params: &Arc<BfvParameters>,
     clues: &[PvwCiphertext],
     messages: &[Vec<u64>],
-    detection_key: &[u8],
-) -> Vec<u8> {
+    detection_key: &DetectionKey,
+    multiplicators: &HashMap<usize, Multiplicator>,
+) -> MessageDigest {
     debug_assert!(clues.len() == messages.len());
 
-    let bfv_params = Arc::new(
-        BfvParametersBuilder::new()
-            .set_degree(DEGREE)
-            .set_moduli(MODULI_OMR)
-            .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .build()
-            .unwrap(),
-    );
-
     let pvw_params = Arc::new(PvwParameters::default());
-    let detection_key = deserialize_detection_key(&bfv_params, detection_key);
 
     // FIXME: REMOVE THIS
     let mut rng = thread_rng();
@@ -786,7 +782,7 @@ pub fn server_process(
         &pvw_params,
         &detection_key.pvw_sk_cts,
         &detection_key.ek1,
-        &detection_key.rlk_keys,
+        &multiplicators,
         clues,
         &dummy_bfv_sk,
     );
@@ -821,13 +817,11 @@ pub fn server_process(
     );
     println!("Phase 2 time: {:?}", now.elapsed());
 
-    let message_digest = MessageDigest {
+    MessageDigest {
         seed,
         pv: pv_ct,
         msgs: msg_cts,
-    };
-
-    serialize_message_digest(&message_digest)
+    }
 }
 
 #[cfg(test)]
@@ -837,8 +831,8 @@ mod tests {
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
-        gen_rot_keys_inner_product, powers_of_x_poly, range_fn_poly, serialize_detection_key,
-        solve_equations,
+        gen_rot_keys_inner_product, map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly,
+        serialize_detection_key, solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use fhe::bfv::EvaluationKeyBuilder;
@@ -869,13 +863,8 @@ mod tests {
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
         let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
         let pvw_pk = pvw_sk.public_key(&mut rng);
-        let d_key = serialize_detection_key(&gen_detection_key(
-            &bfv_params,
-            &pvw_params,
-            &bfv_sk,
-            &pvw_sk,
-            &mut rng,
-        ));
+        let detection_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+        let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
 
         // gen clues
         let mut pertinent_indices = gen_pertinent_indices(50, SET_SIZE);
@@ -886,7 +875,13 @@ mod tests {
         let payloads = gen_paylods(SET_SIZE);
         println!("Clues generated");
 
-        let msg_digest = server_process(&clues, &payloads, &d_key);
+        let msg_digest = server_process(
+            &bfv_params,
+            &clues,
+            &payloads,
+            &detection_key,
+            &multiplicators,
+        );
 
         // std::fs::File::create("target/message.bin")
         //     .unwrap()
@@ -935,6 +930,7 @@ mod tests {
 
         let mut rng = thread_rng();
         let d_ky = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+        let multiplicators = map_rlks_to_multiplicators(&d_ky.rlk_keys);
 
         let (assigned_buckets, assigned_weights) =
             assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size, &mut rng);
@@ -946,7 +942,7 @@ mod tests {
             &pvw_params,
             &d_ky.pvw_sk_cts,
             &d_ky.ek1,
-            &d_ky.rlk_keys,
+            &multiplicators,
             &clues,
             &bfv_sk,
         );
@@ -1149,7 +1145,7 @@ mod tests {
         let pvw_params = Arc::new(PvwParameters::default());
 
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-        let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+        let mut multiplicators = map_rlks_to_multiplicators(&gen_rlk_keys(&bfv_params, &bfv_sk));
 
         let X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
@@ -1164,7 +1160,14 @@ mod tests {
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         let mut now = std::time::SystemTime::now();
-        let res_ct = range_fn(&bfv_params, &ct, &rlk_keys, 1, "params_850.bin", &bfv_sk);
+        let res_ct = range_fn(
+            &bfv_params,
+            &ct,
+            &multiplicators,
+            1,
+            "params_850.bin",
+            &bfv_sk,
+        );
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
@@ -1219,7 +1222,7 @@ mod tests {
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
 
-        let mut rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+        let mut multiplicators = map_rlks_to_multiplicators(&gen_rlk_keys(&bfv_params, &bfv_sk));
 
         let k_degree = 256;
 
@@ -1231,7 +1234,7 @@ mod tests {
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         // let mut now = std::time::SystemTime::now();
-        let powers_ct = powers_of_x(&ct, k_degree, &bfv_params, &rlk_keys, 1);
+        let powers_ct = powers_of_x(&ct, k_degree, &bfv_params, &multiplicators, 1);
         // println!(" Final power of X {:?}", now.elapsed().unwrap());
 
         // plaintext evaluation of X
@@ -1486,7 +1489,7 @@ mod tests {
                 .unwrap(),
         );
         let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-        let rlk_keys = gen_rlk_keys(&bfv_params, &bfv_sk);
+        let multiplicators = map_rlks_to_multiplicators(&gen_rlk_keys(&bfv_params, &bfv_sk));
 
         let mul_count = 5;
         let pt_modulus = Modulus::new(bfv_params.plaintext()).unwrap();
@@ -1498,7 +1501,7 @@ mod tests {
             cts.push(bfv_sk.try_encrypt(&pt, &mut rng).unwrap());
         }
 
-        mul_many(&mut cts, &rlk_keys, 1);
+        mul_many(&mut cts, &multiplicators, 1);
         dbg!(
             Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&cts[0]).unwrap(), Encoding::simd())
                 .unwrap()
