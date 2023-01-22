@@ -118,7 +118,7 @@ pub fn sub_scaled_by_ratio(a: &[u64], b: &[u64], q_mod: u64, scale_factor: u64) 
         .map(|v| modulus.mul(*v, scale_factor))
         .collect_vec();
     let mut a = a.to_vec();
-    modulus.sub_vec(&mut a, &b);
+    modulus.sub_vec(&mut a, &b, b.len());
     a
 }
 

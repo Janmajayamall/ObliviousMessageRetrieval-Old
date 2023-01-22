@@ -979,6 +979,7 @@ mod tests {
     use rand::distributions::Uniform;
     use rand::prelude::Distribution;
     use rand::{thread_rng, Rng};
+    use std::hash::Hash;
     use std::io::Write;
 
     #[test]
@@ -1477,7 +1478,7 @@ mod tests {
 
         let mut rng = thread_rng();
 
-        let ctx = Arc::new(Context::new(&[t], degree).unwrap());
+        let ctx = Arc::new(Context::new(&[t], degree, &mut HashMap::default()).unwrap());
         let mut X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
             .take(degree)
@@ -1521,7 +1522,7 @@ mod tests {
         // println!(" Final power of X {:?}", now.elapsed().unwrap());
 
         // plaintext evaluation of X
-        let t_ctx = Arc::new(Context::new(&[t], degree).unwrap());
+        let t_ctx = Arc::new(Context::new(&[t], degree, &mut HashMap::default()).unwrap());
         let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
         let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree);
 

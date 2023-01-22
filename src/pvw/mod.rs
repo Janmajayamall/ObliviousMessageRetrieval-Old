@@ -98,7 +98,7 @@ impl PvwPublicKey {
                 .outer_iter()
                 .map(|a_n_m| {
                     let mut r = a_n_m.to_vec();
-                    q.mul_vec(&mut r, &error);
+                    q.mul_vec(&mut r, &error, self.par.m);
                     q.reduce(r.iter().sum::<u64>())
                 })
                 .collect(),
@@ -115,7 +115,7 @@ impl PvwPublicKey {
             izip!(self.b.outer_iter(), t)
                 .map(|(b_ell_m, ti)| {
                     let mut r = b_ell_m.to_vec();
-                    q.mul_vec(&mut r, &error);
+                    q.mul_vec(&mut r, &error, self.par.m);
                     q.add(q.reduce(r.iter().sum::<u64>()), ti)
                 })
                 .collect(),
@@ -230,7 +230,7 @@ impl PvwSecretKey {
                 let ska_ell_m = izip!(a.axis_iter(Axis(1)), e_ell_m.iter())
                     .map(|(m_n, e_value)| {
                         let mut r = m_n.to_vec();
-                        q.mul_vec(&mut r, key_ell_n);
+                        q.mul_vec(&mut r, key_ell_n, self.par.n);
                         let r = (r.iter().sum::<u64>()) + *e_value;
                         r
                     })
@@ -238,7 +238,7 @@ impl PvwSecretKey {
                 ska_ell_m
             })
             .collect_vec();
-        q.reduce_vec(&mut ska);
+        q.reduce_vec(&mut ska, self.par.ell * self.par.m);
         let ska = Array::from_shape_vec((self.par.ell, self.par.m), ska).unwrap();
 
         PvwPublicKey {
@@ -255,7 +255,7 @@ impl PvwSecretKey {
         izip!(ct.b.iter(), self.key.outer_iter())
             .map(|(b_ell, k_ell_n)| {
                 let mut r = ct.a.clone();
-                q.mul_vec(&mut r, &k_ell_n.to_vec());
+                q.mul_vec(&mut r, &k_ell_n.to_vec(), self.par.n);
                 let d = q.sub(*b_ell, q.reduce(r.iter().sum::<u64>()));
                 (d >= self.par.q / 2) as u64
             })
@@ -268,7 +268,7 @@ impl PvwSecretKey {
         izip!(ct.b.iter(), self.key.outer_iter())
             .map(|(b_ell, k_ell_n)| {
                 let mut r = ct.a.clone();
-                q.mul_vec(&mut r, &k_ell_n.to_vec());
+                q.mul_vec(&mut r, &k_ell_n.to_vec(), self.par.n);
 
                 // shift value left by q/4 so that
                 // indices encrypting 0 are near value 0.
