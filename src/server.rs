@@ -4,7 +4,6 @@ use crate::utils::{
     serialize_message_digest,
 };
 use crate::{CT_SPAN_COUNT, DEGREE, GAMMA, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE};
-use bincode::config::RejectTrailing;
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
@@ -100,7 +99,6 @@ pub fn powers_of_x(
         let mut res_deg = 0;
 
         while curr_deg > 0 {
-            // let mut now = std::time::SystemTime::now();
             if (curr_deg & 1) == 1 {
                 curr_deg -= 1;
 
@@ -133,7 +131,7 @@ pub fn powers_of_x(
                             num_mod[res_deg - 1] += 1;
                         }
                         // println!(
-                        //     "Mod level {} {:?}",
+                        //     "res.mod_switch_to_next_level(); {} {:?}",
                         //     num_mod[res_deg - 1],
                         //     now.elapsed().unwrap()
                         // );
@@ -156,19 +154,17 @@ pub fn powers_of_x(
                         .multiply(&base, &base)
                         .unwrap();
 
+                    // now = std::time::SystemTime::now();
                     while num_mod[base_deg - 1] < ((base_deg as f32).log2() / 2f32).ceil() as usize
                     {
-                        // now = std::time::SystemTime::now();
-
                         base.mod_switch_to_next_level();
                         num_mod[base_deg - 1] += 1;
-
-                        // println!(
-                        //     "Mod level {} {:?}",
-                        //     num_mod[base_deg - 1],
-                        //     now.elapsed().unwrap()
-                        // );
                     }
+                    // println!(
+                    //     "base.mod_switch_to_next_level(); {} {:?}",
+                    //     num_mod[base_deg - 1],
+                    //     now.elapsed()
+                    // );
 
                     outputs[base_deg - 1] = base.clone();
                     calculated[base_deg - 1] = 1;
@@ -197,12 +193,12 @@ pub fn range_fn(
     params_path: &str,
     sk: &SecretKey,
 ) -> Ciphertext {
-    let mut now = std::time::SystemTime::now();
+    // let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level `level_offset` + 4
     let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, multiplicators, level_offset);
-    println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
+    // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
-    now = std::time::SystemTime::now();
+    // now = std::time::SystemTime::now();
     // m = x^256
     // all k_powers_of_m are at level `level_offset` + 8
     let k_powers_of_m = powers_of_x(
@@ -247,7 +243,7 @@ pub fn range_fn(
             )
             .unwrap();
 
-            // now = std::time::SystemTime:w:now();
+            // now = std::time::SystemTime::now();
             let scalar_product = &k_powers_of_x[j - 1] * &c_pt;
             // println!(" scalar product {} {} {:?}", i, j, now.elapsed().unwrap());
 
@@ -276,7 +272,6 @@ pub fn range_fn(
         //     now.elapsed().unwrap()
         // );
 
-        // now = std::time::SystemTime::now();
         if i != 0 {
             // mul and add
             let mut p = multiplicators
@@ -350,6 +345,98 @@ pub fn decrypt_pvw(
             ct_pvw_sk[ell_index] = rotation_key
                 .rotates_columns_by(&ct_pvw_sk[ell_index], 1)
                 .unwrap();
+            // println!("ct_pvw_sk[ell_index] rotate l by 1: {:?}", now.elapsed());
+
+            // unsafe {
+            //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
+            //     dbg!(sk.measure_noise(&sk_a[ell_index]));
+            // }
+        }
+    }
+
+    // for ell_index in 0..pvw_params.ell {
+    // unsafe {
+    //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
+    //     dbg!(sk.measure_noise(&sk_a[ell_index]));
+    // }
+    // }
+
+    // let mut now = std::time::Instant::now();
+    for p in &mut sk_a {
+        *p = -&*p;
+    }
+    // println!("neg sk_a: {:?}", now.elapsed());
+
+    // sk_a = b - sk * a
+    let q = Modulus::new(pvw_params.q).unwrap();
+    for ell_index in 0..pvw_params.ell {
+        let mut b_ell = vec![0u64; clues.len()];
+        for i in 0..clues.len() {
+            // We shift decrypted value by q/4 so that if
+            // it's encryption of `0`, then resulting value
+            // is within [-r, r].
+            // Note that in range function we output 1 (i.e
+            // clue is pertinent) if decrypted value is within
+            // [-r, r]
+            b_ell[i] = q.sub(clues[i].b[ell_index], q.modulus() / 4);
+        }
+        let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
+
+        // now = std::time::Instant::now();
+        sk_a[ell_index] += &b_ell;
+        // println!("sk_a[ell_index] += &b_ell: {:?}", now.elapsed());
+    }
+
+    // reduce noise of cts in d
+    for v in &mut sk_a {
+        // now = std::time::Instant::now();
+        v.mod_switch_to_next_level();
+        // println!("v.mod_switch_to_next_level(): {:?}", now.elapsed());
+    }
+
+    sk_a
+}
+
+/// decrypt pvw cts
+pub fn decrypt_pvw_cached(
+    bfv_params: &Arc<BfvParameters>,
+    pvw_params: &PvwParameters,
+    ct_pvw_sk: &[Ciphertext],
+    clues: &[PvwCiphertext],
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
+    let sec_len = pvw_params.n.next_power_of_two();
+    debug_assert!(ct_pvw_sk.len() == pvw_params.ell * sec_len);
+    debug_assert!(((bfv_params.degree() / sec_len) * pvw_params.n) >= clues.len());
+
+    // computes sk * a
+    let mut sk_a = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
+    for i in 0..sec_len {
+        let mut values = vec![0u64; clues.len()];
+        for j in 0..clues.len() {
+            let index = (i + j) % sec_len;
+
+            if index >= pvw_params.n {
+                values[j] = 0;
+            } else {
+                values[j] = clues[j].a[index];
+            }
+        }
+        let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
+
+        for ell_index in 0..pvw_params.ell {
+            // let mut now = std::time::Instant::now();
+            let product = &ct_pvw_sk[i * pvw_params.ell + ell_index] * &values_pt;
+            // println!("&ct_pvw_sk[ell_index] * &values_pt: {:?}", now.elapsed());
+            // now = std::time::Instant::now();
+            sk_a[ell_index] += &product;
+            // println!("sk_a[ell_index] += &product;: {:?}", now.elapsed());
+
+            // rotate left by 1
+            // now = std::time::Instant::now();
+            // ct_pvw_sk[ell_index] = rotation_key
+            //     .rotates_columns_by(&ct_pvw_sk[ell_index], 1)
+            //     .unwrap();
             // println!("ct_pvw_sk[ell_index] rotate l by 1: {:?}", now.elapsed());
 
             // unsafe {
@@ -583,6 +670,8 @@ pub fn phase1(
     let res: Vec<Ciphertext> = clues
         .par_chunks(degree)
         .map(|c| {
+            //
+
             // level 0
             let mut now = std::time::Instant::now();
             let decrypted_clues = decrypt_pvw(
@@ -608,6 +697,53 @@ pub fn phase1(
             now = std::time::Instant::now();
             mul_many(&mut ranged_decrypted_clues, multiplicators, 9);
             println!("mul_many time {:?}", now.elapsed());
+            // assert!(ranged_decrypted_clues.len() == 1);
+            // level 10; mul_many consumes 1
+            ranged_decrypted_clues[0].clone()
+        })
+        .collect();
+
+    res
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn phase1_cached(
+    bfv_params: &Arc<BfvParameters>,
+    pvw_params: &PvwParameters,
+    ct_pvw_sk: &[Ciphertext],
+    multiplicators: &HashMap<usize, Multiplicator>,
+
+    clues: &[PvwCiphertext],
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
+    let set_size = clues.len();
+    let degree = bfv_params.degree();
+
+    println!("Phase 1 chunk count {}", set_size / degree);
+
+    let res: Vec<Ciphertext> = clues
+        .par_chunks(degree)
+        .map(|c| {
+            //
+
+            // level 0
+            // let mut now = std::time::Instant::now();
+            let decrypted_clues = decrypt_pvw_cached(bfv_params, pvw_params, ct_pvw_sk, c, sk);
+            // println!("Decrypt_pvw_time {:?}", now.elapsed());
+            // assert!(decrypted_clues.len() == pvw_params.ell);
+
+            // level 1; decryption consumes 1
+            let now = std::time::Instant::now();
+            let mut ranged_decrypted_clues = decrypted_clues
+                .iter()
+                .map(|d| range_fn(bfv_params, d, multiplicators, 1, "params_850.bin", sk))
+                .collect_vec();
+            println!("range time {:?}", now.elapsed());
+
+            // level 9; range fn consumes 8
+            // now = std::time::Instant::now();
+            mul_many(&mut ranged_decrypted_clues, multiplicators, 9);
+            // println!("mul_many time {:?}", now.elapsed());
             // assert!(ranged_decrypted_clues.len() == 1);
             // level 10; mul_many consumes 1
             ranged_decrypted_clues[0].clone()
@@ -887,6 +1023,153 @@ mod tests {
         //     .unwrap()
         //     .write_all(&msg_digest)
         //     .unwrap();
+    }
+
+    #[test]
+    fn test_phase1_cached_and_phase2() {
+        let mut rng = thread_rng();
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_moduli(MODULI_OMR)
+                // .set_moduli_sizes(&[28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .build()
+                .unwrap(),
+        );
+        let pvw_params = Arc::new(PvwParameters::default());
+
+        let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
+        let dummy_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
+        let pvw_sk = Arc::new(PvwSecretKey::random(&pvw_params, &mut rng));
+        let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
+
+        let set_size = 1 << 14;
+        let k = 50;
+        let m = k * 2;
+        let gamma = 5;
+        let data_size_in_bytes = 256;
+        let payload_size = data_size_in_bytes / 2; // t = 65537 ~ 2 ** 16 ~ 16 bits
+        let ct_span_count = (((m * payload_size) as f64) / (DEGREE as f64)).ceil() as usize;
+        dbg!(ct_span_count, payload_size);
+
+        // gen clues
+        let mut pertinent_indices = gen_pertinent_indices(50, set_size);
+        pertinent_indices.sort();
+        println!("Pertinent indices: {:?}", pertinent_indices);
+
+        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, set_size);
+        let payloads = gen_paylods(set_size);
+        assert!(clues.len() == set_size);
+        assert!(payloads.len() == clues.len());
+        println!("Clues generated");
+
+        let mut rng = thread_rng();
+        let d_ky = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+        let multiplicators = map_rlks_to_multiplicators(&d_ky.rlk_keys);
+
+        let (assigned_buckets, assigned_weights) =
+            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size, &mut rng);
+
+        // callc rotations for ct_pvw_sk
+        let mut ct_pvw_sk = d_ky.pvw_sk_cts.to_vec();
+        let mut ct_pvw_sk_rotated = ct_pvw_sk.clone();
+        for _ in (1..512) {
+            for ct in &mut ct_pvw_sk {
+                *ct = d_ky.ek1.rotates_columns_by(ct, 1).unwrap();
+                ct_pvw_sk_rotated.push(ct.clone());
+            }
+        }
+
+        println!("Phase 1 starting...");
+        let now = std::time::Instant::now();
+        let mut phase1_res = phase1_cached(
+            &bfv_params,
+            &pvw_params,
+            &ct_pvw_sk_rotated,
+            &multiplicators,
+            &clues,
+            &bfv_sk,
+        );
+        let phase1_time = now.elapsed();
+
+        println!("Phase 2 starting...");
+        let (res_pv, res_rhs) = phase2(
+            &assigned_buckets,
+            &assigned_weights,
+            &bfv_params,
+            &d_ky.ek2,
+            &d_ky.ek3,
+            &mut phase1_res,
+            &payloads,
+            32,
+            DEGREE,
+            10,
+            set_size,
+            gamma,
+            ct_span_count,
+            m,
+            payload_size,
+            &bfv_sk,
+        );
+        let end_time = now.elapsed();
+        println!(
+            "Phase1 took: {:?}; Phase2 took: {:?}",
+            phase1_time,
+            end_time - phase1_time
+        );
+
+        /// CLIENT SIDE
+        assert_eq!(res_rhs.len(), ct_span_count);
+
+        let pt = bfv_sk.try_decrypt(&res_pv).unwrap();
+        let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
+        let decompressed_pv = pv_decompress(
+            &values,
+            (64 - bfv_params.plaintext().leading_zeros() - 1) as usize,
+        );
+
+        {
+            let mut res_indices = vec![];
+            decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
+                if *bit == 1 {
+                    res_indices.push(index);
+                }
+            });
+            // println!("Expected indices {:?}", pertinent_indices);
+            // println!("Res indices      {:?}", res_indices);
+            assert_eq!(pertinent_indices, res_indices);
+        }
+
+        let lhs = construct_lhs(
+            &decompressed_pv,
+            assigned_buckets,
+            assigned_weights,
+            m,
+            k,
+            gamma,
+            set_size,
+        );
+
+        // build m * payload_size rows
+        let m_rows = res_rhs
+            .iter()
+            .flat_map(|rh| {
+                let pt = bfv_sk.try_decrypt(rh).unwrap();
+                Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
+            })
+            .collect_vec();
+
+        let rhs = construct_rhs(&m_rows, m, payload_size, MODULI_OMR_PT[0]);
+
+        let res = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
+
+        let expected_pertinent_payloads = pertinent_indices
+            .iter()
+            .map(|index| payloads[*index].clone())
+            .collect_vec();
+
+        assert_eq!(res, expected_pertinent_payloads);
     }
 
     #[test]
