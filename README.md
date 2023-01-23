@@ -30,13 +30,34 @@ Server comes to Alice's rescue, by enabling Oblivious message retrieval. All Ali
 
 > Note that you must have `rust` installed.
 
-To run demo, clone this repository and navigate inside it. Then type `cargo run --release 1` for OMR demo.
+### Apple-M1
 
-To calculate _detection key size_ run `cargo run --release 2`.
+1. `git clone https://github.com/Janmajayamall/ObliviousMessageRetrieval.git`.
+2. `cd ObliviousMessageRetrieval`
+3. To run demo, `cargo run --release 1`.
+4. To _detection key size_ run `cargo run --release 2`.
 
-For the demo, transactions set size is set to `2^14` and we have assumed `50` are pertinent to the client.
+In demo, transactions set size is set to `2^14` and we have assumed `50` are pertinent to the client.
 
-On performance, server processing takes around 120s and client processing takes around 100ms on `apple-m1`. I don't have numbers on intel cpus, so if you happen to have x86 device do keep posted. I think the performance will be worse than `m1`. However this should change in coming days as I add support for SIMD operations to the underlying FHE library used in this repo. More info on this [here](https://github.com/Janmajayamall/fhe.rs)
+To limit number of cores run `export RAYON_NUM_THREADS=no_of_cores`, where `no_of_cores` should be replaced by desired number. Setting `no_of_cores` to 0 will use all available cores.
+
+Server time is around 772 seconds on single core.
+
+### x86
+
+For best performance on x86 use machine with `avx512ifma` instruction set available (ex. m6i.xlarge). You can check whether your machine has `avx512ifma` using `rustc --print target-features`. In case you don't spot `avx512ifma` in the list, check for `avx512dq`, otherwise fallback to any other avx(512) instruction set available. Replace `avx512ifma` with the available instruction set in step 3.
+
+1. `git clone https://github.com/Janmajayamall/ObliviousMessageRetrieval.git`.
+2. `cd ObliviousMessageRetrieval`
+3. set `export RUSTFLAGS="-O -C target-feature=+avx512ifma"`
+4. To run demo, `cargo run --release 1`.
+5. To _detection key size_ run `cargo run --release 2`.
+
+In demo, transactions set size is set to `2^14` and we have assumed `50` are pertinent to the client.
+
+To limit number of cores run `export RAYON_NUM_THREADS=no_of_cores`, where `no_of_cores` should be replaced by desired number. Setting `no_of_cores` to 0 will use all available cores.
+
+Server time is around 636 seconds on single core using `avx512ifma` instruction set.
 
 ## Credits
 
