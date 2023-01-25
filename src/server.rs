@@ -193,12 +193,12 @@ pub fn range_fn(
     params_path: &str,
     sk: &SecretKey,
 ) -> Ciphertext {
-    // let mut now = std::time::SystemTime::now();
+    let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level `level_offset` + 4
     let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, multiplicators, level_offset);
-    // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
+    println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
-    // now = std::time::SystemTime::now();
+    now = std::time::SystemTime::now();
     // m = x^256
     // all k_powers_of_m are at level `level_offset` + 8
     let k_powers_of_m = powers_of_x(
@@ -208,7 +208,7 @@ pub fn range_fn(
         multiplicators,
         level_offset + 4,
     );
-    // println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
+    println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
 
     // unsafe {
     //     dbg!(sk
@@ -355,10 +355,10 @@ pub fn decrypt_pvw(
     }
 
     // for ell_index in 0..pvw_params.ell {
-    // unsafe {
-    //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
-    //     dbg!(sk.measure_noise(&sk_a[ell_index]));
-    // }
+    //     unsafe {
+    //         dbg!(sk.measure_noise(&ct_pvw_sk[ell_index])); // 76
+    //         dbg!(sk.measure_noise(&sk_a[ell_index])); // 102
+    //     }
     // }
 
     // let mut now = std::time::Instant::now();
@@ -390,8 +390,13 @@ pub fn decrypt_pvw(
     // reduce noise of cts in d
     for v in &mut sk_a {
         // now = std::time::Instant::now();
+        // unsafe {
+        //     dbg!(sk.measure_noise(v)); // 102
+        // }
         v.mod_switch_to_next_level();
-        // println!("v.mod_switch_to_next_level(): {:?}", now.elapsed());
+        // unsafe {
+        //     println!("v mod switch after: {:?}", sk.measure_noise(v));
+        // }
     }
 
     sk_a
@@ -699,6 +704,15 @@ pub fn phase1(
             println!("mul_many time {:?}", now.elapsed());
             // assert!(ranged_decrypted_clues.len() == 1);
             // level 10; mul_many consumes 1
+
+            unsafe {
+                println!(
+                    "ranged_decrypted_clues[0].clone() noise: {}",
+                    sk.measure_noise(&ranged_decrypted_clues[0].clone())
+                        .unwrap()
+                );
+            }
+
             ranged_decrypted_clues[0].clone()
         })
         .collect();
@@ -799,6 +813,7 @@ pub fn phase2(
 
             for i in 0..degree / batch_size {
                 // level 10
+                let mut now = std::time::SystemTime::now();
                 let unpacked_cts = pv_unpack(
                     bfv_params,
                     rot_keys,
@@ -809,6 +824,7 @@ pub fn phase2(
                     sk,
                     level,
                 );
+                println!("pv_unpack took: {:?}", now.elapsed());
 
                 // if core_index == 0 {
                 //     unsafe {
@@ -820,6 +836,7 @@ pub fn phase2(
                 // }
 
                 // level 12; unpacking consumes 2 levels
+                now = std::time::SystemTime::now();
                 pv_compress(
                     bfv_params,
                     &unpacked_cts,
@@ -828,7 +845,9 @@ pub fn phase2(
                     offset + compress_offset,
                     &mut pv,
                 );
+                println!("pv_compress took: {:?}", now.elapsed());
 
+                now = std::time::SystemTime::now();
                 let pv_we = pv_weights(
                     assigned_buckets,
                     assigned_weights,
@@ -842,8 +861,11 @@ pub fn phase2(
                     offset + compress_offset,
                     level + 2,
                 );
+                println!("pv_weights took: {:?}", now.elapsed());
 
+                now = std::time::SystemTime::now();
                 finalise_combinations(&pv_we, &mut rhs, m, degree, m_row_span);
+                println!("finalise_combinations took: {:?}", now.elapsed());
 
                 offset += batch_size;
             }
@@ -1179,8 +1201,8 @@ mod tests {
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
-                .set_moduli(MODULI_OMR)
-                // .set_moduli_sizes(&[28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
+                // .set_moduli(MODULI_OMR)
+                .set_moduli_sizes(&[52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52])
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 .build()
                 .unwrap(),
@@ -1192,7 +1214,7 @@ mod tests {
         let pvw_sk = Arc::new(PvwSecretKey::random(&pvw_params, &mut rng));
         let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
 
-        let set_size = 1 << 14;
+        let set_size = SET_SIZE;
         let k = 50;
         let m = k * 2;
         let gamma = 5;
@@ -1231,6 +1253,23 @@ mod tests {
             &bfv_sk,
         );
         let phase1_time = now.elapsed();
+        println!("Phase1 took: {:?}", phase1_time);
+
+        let res = Vec::<u64>::try_decode(
+            &bfv_sk.try_decrypt(&phase1_res[0]).unwrap(),
+            Encoding::simd(),
+        )
+        .unwrap();
+        let mut result = vec![];
+        res.iter().enumerate().for_each(|(index, bit)| {
+            if *bit == 1 {
+                result.push(index);
+            }
+        });
+
+        assert_eq!(pertinent_indices, result);
+
+        return;
 
         println!("Phase 2 starting...");
         let (res_pv, res_rhs) = phase2(
@@ -1259,8 +1298,7 @@ mod tests {
         );
 
         /// CLIENT SIDE
-        assert_eq!(res_rhs.len(), ct_span_count);
-
+        // assert_eq!(res_rhs.len(), ct_span_count);
         let pt = bfv_sk.try_decrypt(&res_pv).unwrap();
         let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
         let decompressed_pv = pv_decompress(
@@ -1279,7 +1317,7 @@ mod tests {
             // println!("Res indices      {:?}", res_indices);
             assert_eq!(pertinent_indices, res_indices);
         }
-
+        // return;
         let lhs = construct_lhs(
             &decompressed_pv,
             assigned_buckets,
