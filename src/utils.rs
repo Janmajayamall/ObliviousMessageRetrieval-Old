@@ -337,7 +337,7 @@ pub fn gen_rlk_keys_levelled<R: CryptoRng + RngCore>(
 ) -> HashMap<usize, RelinearizationKey> {
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
     // for powers of x; range fn;
-    for i in 1..11 {
+    for i in 1..12 {
         keys.insert(i, RelinearizationKey::new_leveled(sk, i, i, rng).unwrap());
     }
     keys
@@ -384,8 +384,8 @@ pub fn gen_detection_key<R: CryptoRng + RngCore>(
         .build(rng)
         .unwrap();
     let rlk_keys = gen_rlk_keys_levelled(bfv_params, bfv_sk, rng);
-    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 10, 10, rng);
-    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 12, 12, rng);
+    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 11, 11, rng);
+    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 13, 13, rng);
     let pvw_sk_cts = gen_pvw_sk_cts(bfv_params, pvw_params, bfv_sk, pvw_sk, rng);
 
     assert!(pvw_sk_cts.len() == 4);
@@ -520,14 +520,14 @@ pub fn gen_clues(
     pvw_params: &Arc<PvwParameters>,
     pvw_pk: &PvwPublicKey,
     pertinent_indices: &[usize],
-    set_size: usize,
+    size: usize,
 ) -> Vec<PvwCiphertext> {
     let mut rng = thread_rng();
 
     let tmp_sk = PvwSecretKey::random(pvw_params, &mut rng);
     let other = tmp_sk.public_key(&mut rng).encrypt(&[0, 0, 0, 0], &mut rng);
 
-    (0..set_size)
+    (0..size)
         .map(|index| {
             if pertinent_indices.contains(&index) {
                 pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)

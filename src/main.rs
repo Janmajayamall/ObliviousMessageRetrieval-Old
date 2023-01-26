@@ -17,7 +17,7 @@ fn calculate_detection_key_size() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
-            .set_degree(DEGREE)
+            .set_degree(1 << 15)
             .set_plaintext_modulus(MODULI_OMR_PT[0])
             .set_moduli(MODULI_OMR)
             .build()
