@@ -384,8 +384,8 @@ pub fn gen_detection_key<R: CryptoRng + RngCore>(
         .build(rng)
         .unwrap();
     let rlk_keys = gen_rlk_keys_levelled(bfv_params, bfv_sk, rng);
-    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 11, 11, rng);
-    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 13, 13, rng);
+    let ek2 = gen_rot_keys_pv_selector(bfv_params, bfv_sk, 11, 10, rng);
+    let ek3 = gen_rot_keys_inner_product(bfv_params, bfv_sk, 13, 12, rng);
     let pvw_sk_cts = gen_pvw_sk_cts(bfv_params, pvw_params, bfv_sk, pvw_sk, rng);
 
     assert!(pvw_sk_cts.len() == 4);

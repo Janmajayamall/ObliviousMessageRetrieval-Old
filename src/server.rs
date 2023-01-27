@@ -175,7 +175,6 @@ pub fn powers_of_x(
     }
     // match modulus
     let depth = num_mod[outputs.len() - 1];
-    println!("Depth in power_of_x: {}", depth);
     for i in 0..outputs.len() - 1 {
         while num_mod[i] < depth {
             outputs[i].mod_switch_to_next_level();
@@ -265,17 +264,6 @@ pub fn range_fn(
         // }
 
         // println!(" sum for index {} {:?}", i, now.elapsed().unwrap());
-
-        // now = std::time::SystemTime::now();
-        // match modulus
-        // for _ in 0..4 {
-        //     sum.mod_switch_to_next_level();
-        // }
-        // println!(
-        //     " switching down by 4 mods {} {:?}",
-        //     i,
-        //     now.elapsed().unwrap()
-        // );
 
         if i != 0 {
             // mul and add
@@ -467,15 +455,13 @@ pub fn pv_unpack(
         );
 
         unsafe {
+            println!("pv_ct noise: {}", sk.measure_noise(&pv_ct).unwrap());
             println!("value_vec noise: {}", sk.measure_noise(&value_vec).unwrap());
         }
 
         value_vec.mod_switch_to_next_level();
         value_vec.mod_switch_to_next_level();
-        // println!(
-        //     "{:?}",
-        //     Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
-        // );
+
         unsafe {
             println!(
                 "value_vec noise after 2 mod switch: {}",
@@ -492,22 +478,17 @@ pub fn pv_unpack(
             );
         }
 
-        value_vec.mod_switch_to_next_level();
-
-        unsafe {
-            println!(
-                "value_vec noise after mod switch : {}",
-                sk.measure_noise(&value_vec).unwrap()
-            );
-        }
-        println!();
+        // value_vec.mod_switch_to_next_level();
 
         // unsafe {
         //     println!(
-        //         "value_vec noise after inner sum: {}",
+        //         "value_vec noise after mod switch : {}",
         //         sk.measure_noise(&value_vec).unwrap()
         //     );
         // }
+
+        println!();
+
         pv.push(value_vec);
     }
 
@@ -718,7 +699,7 @@ pub fn phase2(
     m_row_span: usize,
     sk: &SecretKey,
 ) -> (Ciphertext, Vec<Ciphertext>) {
-    debug_assert!(degree % batch_size == 0);
+    debug_assert!(set_size % batch_size == 0);
     // debug_assert!(set_size == degree * pertinency_cts.len()); // TODO: relax this from == to <=
 
     // unsafe {
@@ -740,7 +721,7 @@ pub fn phase2(
             let mut rhs = vec![Ciphertext::zero(bfv_params); ct_span_count];
 
             for i in 0..(set_size / batch_size) {
-                // level 10
+                // level 11
                 let unpacked_cts = pv_unpack(
                     bfv_params,
                     rot_keys,
@@ -762,7 +743,7 @@ pub fn phase2(
                     );
                 });
 
-                // level 12; unpacking consumes 2 levels
+                // level 13; unpacking consumes 2 levels
                 pv_compress(
                     bfv_params,
                     &unpacked_cts,
@@ -916,14 +897,15 @@ mod tests {
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
-        gen_rot_keys_inner_product, map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly,
-        serialize_detection_key, solve_equations,
+        gen_rot_keys_inner_product, gen_rot_keys_pv_selector, map_rlks_to_multiplicators,
+        powers_of_x_poly, range_fn_poly, serialize_detection_key, solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
     use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
     use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter, Serialize};
+    use fhe_util::variance;
     use itertools::izip;
     use rand::distributions::Uniform;
     use rand::prelude::Distribution;
@@ -983,14 +965,17 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
                 // .set_moduli(MODULI_OMR)
-                .set_moduli_sizes(&[28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
-                // .set_moduli_sizes(&[50; 15])
+                .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
+                // .set_moduli_sizes(&[52; 15])
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 // .set_variance(5)
                 .build()
                 .unwrap(),
         );
         let pvw_params = Arc::new(PvwParameters::default());
+
+        println!("Bfv Params{:?}", bfv_params);
+        println!("Bfv moduli sizes{:?}", bfv_params.moduli_sizes());
 
         let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
         let dummy_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
@@ -1007,7 +992,7 @@ mod tests {
         dbg!(ct_span_count, payload_size);
 
         // gen clues
-        let mut pertinent_indices = vec![1, 2, 3];
+        let mut pertinent_indices = gen_pertinent_indices(50, DEGREE);
         pertinent_indices.sort();
         println!("Pertinent indices: {:?}", pertinent_indices);
 
@@ -1051,7 +1036,7 @@ mod tests {
                     res_indices.push(i);
                 }
             });
-            println!("res_indices: {:?}", res_indices);
+            println!("res_indices after phase 1: {:?}", res_indices);
         }
 
         println!("Phase 2 starting...");
@@ -1140,6 +1125,11 @@ mod tests {
         );
         println!(
             "expected_pertinent_payloads: {:?}",
+            &expected_pertinent_payloads
+        );
+
+        assert_eq!(
+            &res[..expected_pertinent_payloads.len()],
             &expected_pertinent_payloads
         );
     }
@@ -1649,5 +1639,139 @@ mod tests {
             .unwrap();
         ct.mod_switch_to_last_level();
         dbg!(ct.to_bytes().len());
+    }
+
+    #[test]
+    fn plaintext_noise() {
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(1 << 14)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                // .set_moduli(&MODULI_OMR[..2])
+                .set_moduli_sizes(&[28, 39])
+                .set_variance(10)
+                .build()
+                .unwrap(),
+        );
+        let pt = Plaintext::try_encode(
+            &vec![1u64, 34, 2, 4, 2, 2, 342, 2],
+            Encoding::simd(),
+            &params,
+        )
+        .unwrap();
+        let pt2 = Plaintext::try_encode(
+            &vec![1u64, 34, 2, 4, 2, 2, 342, 2],
+            Encoding::simd(),
+            &params,
+        )
+        .unwrap();
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let mut ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+        unsafe { dbg!(sk.measure_noise(&ct)) };
+        ct *= &pt2;
+        unsafe { dbg!(sk.measure_noise(&ct)) };
+    }
+
+    #[test]
+    fn inner_product_noise() {
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(1 << 15)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                // .set_moduli(&MODULI_OMR[..2])
+                .set_moduli_sizes(&[28, 39, 60, 60])
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let pt = Plaintext::try_encode(
+            &vec![1u64, 34, 2, 4, 2, 2, 342, 2],
+            Encoding::simd(),
+            &params,
+        )
+        .unwrap();
+        let mut ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+        ct.mod_switch_to_next_level();
+
+        let ek = gen_rot_keys_inner_product(&params, &sk, 1, 0, &mut rng);
+        ct = ek.computes_inner_sum(&ct).unwrap();
+        unsafe { dbg!(sk.measure_noise(&ct)) };
+    }
+
+    #[test]
+    fn left_rotate_noise() {
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(1 << 15)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                // .set_moduli(&MODULI_OMR[..2])
+                .set_moduli_sizes(&[28, 39, 60])
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let pt = Plaintext::try_encode(
+            &vec![1u64, 34, 2, 4, 2, 2, 342, 2],
+            Encoding::simd(),
+            &params,
+        )
+        .unwrap();
+        let pt2 = Plaintext::try_encode(
+            &vec![1u64, 34, 2, 4, 2, 2, 342, 2],
+            Encoding::simd_at_level(1),
+            &params,
+        )
+        .unwrap();
+        let mut ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+        ct.mod_switch_to_next_level();
+
+        // let ek = gen_rot_keys_inner_product(&params, &sk, 1, 0, &mut rng);
+        let ek = gen_rot_keys_pv_selector(&params, &sk, 1, 0, &mut rng);
+        ct = ek.rotates_rows(&ct).unwrap(); // 12 and 72
+        unsafe { dbg!(sk.measure_noise(&ct)) };
+        ct *= &pt2;
+        unsafe { dbg!(sk.measure_noise(&ct)) };
+    }
+
+    #[test]
+    fn mul_noise() {
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(1 << 15)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                // .set_moduli(&MODULI_OMR[..2])
+                .set_moduli_sizes(&[28, 39, 60, 60, 60, 60])
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let rlk = RelinearizationKey::new_leveled(&sk, 1, 0, &mut rng).unwrap();
+        let multiplicator = Multiplicator::default(&rlk).unwrap();
+
+        let pt = Plaintext::try_encode(
+            &vec![1u64, 34, 2, 4, 2, 2, 342, 2],
+            Encoding::simd(),
+            &params,
+        )
+        .unwrap();
+        let mut ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+        ct.mod_switch_to_next_level();
+
+        // let ek = gen_rot_keys_inner_product(&params, &sk, 1, 0, &mut rng);
+        let mut ct2 = multiplicator.multiply(&ct, &ct).unwrap();
+        ct2.mod_switch_to_next_level();
+        unsafe { dbg!(sk.measure_noise(&ct2)) };
     }
 }
