@@ -314,7 +314,6 @@ pub fn decrypt_pvw(
     debug_assert!(ct_pvw_sk.len() == pvw_params.ell);
 
     let sec_len = pvw_params.n.next_power_of_two();
-    debug_assert!(((bfv_params.degree() / sec_len) * pvw_params.n) >= clues.len());
 
     // computes sk * a
     let mut sk_a = vec![Ciphertext::zero(bfv_params); pvw_params.ell];
@@ -478,15 +477,6 @@ pub fn pv_unpack(
             );
         }
 
-        // value_vec.mod_switch_to_next_level();
-
-        // unsafe {
-        //     println!(
-        //         "value_vec noise after mod switch : {}",
-        //         sk.measure_noise(&value_vec).unwrap()
-        //     );
-        // }
-
         println!();
 
         pv.push(value_vec);
@@ -507,12 +497,12 @@ pub fn pv_compress(
     debug_assert!(pv.len() == to_compress_len);
 
     let log_t = 64 - bfv_params.plaintext().leading_zeros() - 1;
+    let mut select = vec![0u64; bfv_params.degree()];
 
     for i in 0..to_compress_len {
         let index = ((i + offset) as f32 / log_t as f32).floor() as usize;
         let bit_index = ((i + offset) as u32) % log_t;
 
-        let mut select = vec![0u64; bfv_params.degree()];
         select[index] = 1 << bit_index;
         // FIXME: performing forward NTT for same PT again and again isn't optimal
         let select_pt =
@@ -529,6 +519,8 @@ pub fn pv_compress(
         }
 
         *compressed_pv += &product;
+
+        select[index] = 0;
     }
 }
 
@@ -993,6 +985,7 @@ mod tests {
 
         // gen clues
         let mut pertinent_indices = gen_pertinent_indices(50, DEGREE);
+        // let mut pertinent_indices = vec![1, 2, 3];
         pertinent_indices.sort();
         println!("Pertinent indices: {:?}", pertinent_indices);
 
@@ -1500,7 +1493,7 @@ mod tests {
 
     #[test]
     fn test_pv_compress() {
-        let degree = 512;
+        let degree = 1 << 15;
         let t = MODULI_OMR_PT[0];
 
         let mut rng = thread_rng();
@@ -1548,6 +1541,7 @@ mod tests {
 
                 pv_values.extend(batch_cts.0);
 
+                let now = std::time::SystemTime::now();
                 pv_compress(
                     &bfv_params,
                     &batch_cts.1,
@@ -1557,6 +1551,7 @@ mod tests {
                     &mut comressed_pv,
                     &bfv_sk,
                 );
+                println!("pv pv_compress took: {:?}", now.elapsed());
 
                 offset += batch_size;
             }
