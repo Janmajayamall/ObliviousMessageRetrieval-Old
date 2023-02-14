@@ -85,6 +85,27 @@ pub fn construct_rhs(values: &[u64], m: usize, m_row_span: usize, q_mod: u64) ->
         .collect()
 }
 
+/// Takes in OMD digest in plaintext and output pertinent indices
+pub fn process_digest_omd(
+    digest_ct: Ciphertext,
+    sk: &SecretKey,
+    bfv_params: &Arc<BfvParameters>,
+) -> Vec<usize> {
+    let mut pt =
+        Vec::<u64>::try_decode(&sk.try_decrypt(&digest_ct).unwrap(), Encoding::simd()).unwrap();
+    let mut indices = vec![];
+    let degree = bfv_params.degree();
+    pt.iter_mut().enumerate().for_each(|(index, value)| {
+        for i in 0..16 {
+            if *value & 1 == 1 {
+                indices.push(i * degree + index)
+            }
+            *value >>= 1;
+        }
+    });
+    indices
+}
+
 mod tests {
     use super::*;
     use crate::utils::{assign_buckets, solve_equations};

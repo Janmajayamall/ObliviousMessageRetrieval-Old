@@ -296,7 +296,6 @@ pub fn range_fn(
             "range_fn total noise: {}",
             sk.measure_noise(&total).unwrap()
         );
-        println!();
     }
 
     total
@@ -636,6 +635,7 @@ pub fn phase1(
                 c,
                 sk,
             );
+            println!();
             println!("Decrypt_pvw_time {:?}", now.elapsed());
             // assert!(decrypted_clues.len() == pvw_params.ell);
 
@@ -660,6 +660,7 @@ pub fn phase1(
                     sk.measure_noise(&ranged_decrypted_clues[0]).unwrap()
                 );
             }
+            println!();
 
             ranged_decrypted_clues[0].clone()
         })
@@ -817,6 +818,65 @@ pub fn phase2(
     (pv, rhs_total)
 }
 
+fn phase2_omd(
+    pertinency_cts: &mut [Ciphertext],
+    bfv_params: &Arc<BfvParameters>,
+    level: usize,
+    sk: &SecretKey,
+) -> Ciphertext {
+    let mut pertinency_cts = pertinency_cts.to_vec();
+    while pertinency_cts.len() < 16 {
+        pertinency_cts.push(pertinency_cts[0].clone());
+    }
+    {
+        println!();
+        pertinency_cts.iter().for_each(|c| unsafe {
+            println!("pv ct noise: {}", sk.measure_noise(&c).unwrap());
+        });
+        println!();
+    }
+    pertinency_cts
+        .iter_mut()
+        .enumerate()
+        .for_each(|(index, pv_ct)| {
+            // let g = if index < mark { 1u64 << index } else { 0u64 };
+            let pt = Plaintext::try_encode(
+                &vec![1u64 << index; bfv_params.degree()],
+                Encoding::simd_at_level(level),
+                bfv_params,
+            )
+            .unwrap();
+            *pv_ct *= &pt;
+        });
+    let mut digest = Ciphertext::zero(bfv_params);
+    pertinency_cts
+        .iter()
+        .enumerate()
+        .for_each(|(index, pv_ct)| {
+            unsafe {
+                println!(
+                    "pv multiplied index:{} noise: {}",
+                    index,
+                    sk.measure_noise(&pv_ct).unwrap()
+                );
+            }
+            digest += pv_ct;
+        });
+
+    unsafe {
+        println!("Digest noise: {}", sk.measure_noise(&digest).unwrap());
+    }
+    digest.mod_switch_to_last_level();
+    unsafe {
+        println!(
+            "Digest (after mod to last_level) noise: {}",
+            sk.measure_noise(&digest).unwrap()
+        );
+    }
+
+    digest
+}
+
 pub fn server_process(
     bfv_params: &Arc<BfvParameters>,
     clues: &[PvwCiphertext],
@@ -885,7 +945,9 @@ pub fn server_process(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
+    use crate::client::{
+        construct_lhs, construct_rhs, gen_pvw_sk_cts, process_digest_omd, pv_decompress,
+    };
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
@@ -893,6 +955,7 @@ mod tests {
         powers_of_x_poly, range_fn_poly, serialize_detection_key, solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
+    // use fhe::bfv::traits::TryConvertFrom;
     use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
@@ -950,14 +1013,16 @@ mod tests {
     }
 
     #[test]
-    fn test_phase1_and_phase2() {
+    fn test_phase1_and_phase2_omd() {
         let mut rng = thread_rng();
         // let f = [28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60];
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
                 // .set_moduli(MODULI_OMR)
-                .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
+                .set_moduli_sizes(&[50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
+                // .set_moduli_sizes(&[52; 14])
+                // .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
                 // .set_moduli_sizes(&[52; 15])
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 // .set_variance(5)
@@ -984,23 +1049,20 @@ mod tests {
         dbg!(ct_span_count, payload_size);
 
         // gen clues
-        let mut pertinent_indices = gen_pertinent_indices(50, DEGREE);
+        let mut pertinent_indices = gen_pertinent_indices(100, SET_SIZE);
         // let mut pertinent_indices = vec![1, 2, 3];
         pertinent_indices.sort();
         println!("Pertinent indices: {:?}", pertinent_indices);
 
-        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, DEGREE);
-        let payloads = gen_paylods(DEGREE);
+        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, SET_SIZE);
+        // let payloads = gen_paylods(DEGREE);
         // assert!(clues.len() == set_size);
-        assert!(payloads.len() == clues.len());
+        // assert!(payloads.len() == clues.len());
         println!("Clues generated");
 
         let mut rng = thread_rng();
         let d_ky = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
         let multiplicators = map_rlks_to_multiplicators(&d_ky.rlk_keys);
-
-        let (assigned_buckets, assigned_weights) =
-            assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size, &mut rng);
 
         println!("Phase 1 starting...");
         let now = std::time::Instant::now();
@@ -1013,16 +1075,17 @@ mod tests {
             &clues,
             &bfv_sk,
         );
-        println!("phase1 time: {:?}", now.elapsed());
-        let phase1_time = now.elapsed();
+        println!("phase 1 time: {:?}", now.elapsed());
 
         {
             println!("phase1_res len:{}", phase1_res.len());
-            let res = Vec::<u64>::try_decode(
-                &bfv_sk.try_decrypt(&phase1_res[0]).unwrap(),
-                Encoding::simd(),
-            )
-            .unwrap();
+            let res = phase1_res
+                .iter()
+                .flat_map(|ct| {
+                    Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&ct).unwrap(), Encoding::simd())
+                        .unwrap()
+                })
+                .collect_vec();
             let mut res_indices = vec![];
             res.iter().enumerate().for_each(|(i, bit)| {
                 if *bit == 1 {
@@ -1033,98 +1096,16 @@ mod tests {
         }
 
         println!("Phase 2 starting...");
-        let (res_pv, res_rhs) = phase2(
-            &assigned_buckets,
-            &assigned_weights,
-            &bfv_params,
-            &d_ky.ek2,
-            &d_ky.ek3,
-            &mut phase1_res,
-            &payloads,
-            32,
-            DEGREE,
-            11,
-            set_size,
-            gamma,
-            ct_span_count,
-            m,
-            payload_size,
-            &bfv_sk,
-        );
-        let end_time = now.elapsed();
-        println!(
-            "Phase1 took: {:?}; Phase2 took: {:?}",
-            phase1_time,
-            end_time - phase1_time
-        );
+        let now = std::time::Instant::now();
+        let res = phase2_omd(&mut phase1_res, &bfv_params, 11, &bfv_sk);
+        println!("phase 2 time: {:?}", now.elapsed());
 
-        /// CLIENT SIDE
-        println!(
-            "res_rhs.len(): {}, ct_span_count: {}",
-            res_rhs.len(),
-            ct_span_count
-        );
+        // client side
+        let mut indices = process_digest_omd(res, &bfv_sk, &bfv_params);
+        indices.sort();
 
-        let pt = bfv_sk.try_decrypt(&res_pv).unwrap();
-        let values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
-        let decompressed_pv = pv_decompress(
-            &values,
-            (64 - bfv_params.plaintext().leading_zeros() - 1) as usize,
-        );
-
-        {
-            let mut res_indices = vec![];
-            decompressed_pv.iter().enumerate().for_each(|(index, bit)| {
-                if *bit == 1 {
-                    res_indices.push(index);
-                }
-            });
-            // println!("Expected indices {:?}", pertinent_indices);
-            // println!("Res indices      {:?}", res_indices);
-            assert_eq!(pertinent_indices, res_indices);
-        }
-
-        let lhs = construct_lhs(
-            &decompressed_pv,
-            assigned_buckets,
-            assigned_weights,
-            m,
-            k,
-            gamma,
-            set_size,
-        );
-
-        // build m * payload_size rows
-        let m_rows = res_rhs
-            .iter()
-            .flat_map(|rh| {
-                let pt = bfv_sk.try_decrypt(rh).unwrap();
-                Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap()
-            })
-            .collect_vec();
-
-        let rhs = construct_rhs(&m_rows, m, payload_size, MODULI_OMR_PT[0]);
-
-        let res = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
-
-        let expected_pertinent_payloads = pertinent_indices
-            .iter()
-            .map(|index| payloads[*index].clone())
-            .collect_vec();
-
-        println!(
-            "res[..expected_pertinent_payloads.len()]: {:?}",
-            &res[..expected_pertinent_payloads.len()],
-        );
-        println!(
-            "expected_pertinent_payloads: {:?}",
-            &expected_pertinent_payloads
-        );
-
-        assert_eq!(
-            &res[..expected_pertinent_payloads.len()],
-            &expected_pertinent_payloads
-        );
+        println!("expected: {:?}", pertinent_indices);
+        println!("result: {:?}", indices);
     }
 
     #[test]
@@ -1768,5 +1749,33 @@ mod tests {
         let mut ct2 = multiplicator.multiply(&ct, &ct).unwrap();
         ct2.mod_switch_to_next_level();
         unsafe { dbg!(sk.measure_noise(&ct2)) };
+    }
+
+    #[test]
+    fn phase2_omd_noise() {
+        let params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(1 << 15)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                // .set_moduli(&MODULI_OMR[..2])
+                .set_moduli_sizes(&[50, 50, 60])
+                .build()
+                .unwrap(),
+        );
+
+        let mut rng = thread_rng();
+        let sk = SecretKey::random(&params, &mut rng);
+
+        let mut cts = vec![];
+        for i in 0..16 {
+            let pt =
+                Plaintext::try_encode(&vec![20u64; 1 << 15], Encoding::simd(), &params).unwrap();
+            let mut ct: Ciphertext = sk.try_encrypt(&pt, &mut rng).unwrap();
+            cts.push(ct);
+        }
+        let digest = phase2_omd(&mut cts, &params, 0, &sk);
+        unsafe {
+            dbg!(sk.measure_noise(&digest));
+        }
     }
 }

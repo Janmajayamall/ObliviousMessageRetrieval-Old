@@ -337,7 +337,7 @@ pub fn gen_rlk_keys_levelled<R: CryptoRng + RngCore>(
 ) -> HashMap<usize, RelinearizationKey> {
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
     // for powers of x; range fn;
-    for i in 1..11 {
+    for i in 1..13 {
         keys.insert(i, RelinearizationKey::new_leveled(sk, i, i, rng).unwrap());
     }
 
