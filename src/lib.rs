@@ -5,6 +5,7 @@ pub mod utils;
 pub use fhe;
 pub use fhe_traits;
 
+pub const OMR_S_SIZES: &[usize; 15] = &[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60];
 pub const MODULI_OMR: &[u64; 15] = &[
     268369921,
     549755486209,

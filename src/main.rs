@@ -6,12 +6,11 @@ use omr::{
     pvw::{PvwParameters, PvwPublicKey, PvwSecretKey},
     server::*,
     utils::*,
-    DEGREE, GAMMA, K, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE,
+    DEGREE, GAMMA, K, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, OMR_S_SIZES, SET_SIZE,
 };
 use rand::{thread_rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use std::sync::Arc;
-use std::vec;
 
 fn calculate_detection_key_size() {
     let mut rng = thread_rng();
@@ -19,7 +18,7 @@ fn calculate_detection_key_size() {
         BfvParametersBuilder::new()
             .set_degree(1 << 15)
             .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli(MODULI_OMR)
+            .set_moduli_sizes(OMR_S_SIZES)
             .build()
             .unwrap(),
     );
