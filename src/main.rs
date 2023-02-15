@@ -1,3 +1,4 @@
+use clap::{Parser, Subcommand};
 use itertools::Itertools;
 use omr::{
     client::*,
@@ -10,24 +11,37 @@ use omr::{
 };
 use rand::{thread_rng, SeedableRng};
 use rand_chacha::ChaChaRng;
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-fn calculate_detection_key_size() {
-    let mut rng = thread_rng();
-    let bfv_params = Arc::new(
-        BfvParametersBuilder::new()
-            .set_degree(1 << 15)
-            .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli_sizes(OMR_S_SIZES)
-            .build()
-            .unwrap(),
-    );
-    let pvw_params = Arc::new(PvwParameters::default());
-    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    let key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-    let s = serialize_detection_key(&key);
-    println!("Detection key size: {}MB", s.len() as f64 / 1000000.0)
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    run: Run,
+}
+
+#[derive(Subcommand)]
+enum Run {
+    Phase1 {
+        #[arg(short, long)]
+        detection_key: PathBuf,
+        #[arg(short, long)]
+        mappings: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+    },
+    Phase2 {
+        #[arg(short, long)]
+        start_range: usize,
+        #[arg(short, long)]
+        end_range: usize,
+        #[arg(short, long)]
+        detection_key: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+    },
 }
 
 fn run() {
@@ -122,17 +136,31 @@ fn run() {
 }
 
 fn main() {
-    let val = std::env::args().nth(1).map(|v| {
-        v.as_str()
-            .parse::<usize>()
-            .expect("Choose 1 to run demo. Choose 2 to display detection key size")
-    });
-
-    match val {
-        Some(1) => run(),
-        Some(2) => calculate_detection_key_size(),
-        _ => {
-            println!("Choose 1 to run demo. Choose 2 to display detection key size")
-        }
+    let cli = Cli::parse();
+    match cli.run {
+        Run::Phase1 {
+            detection_key,
+            mappings,
+            output_dir,
+        } => {}
+        Run::Phase2 {
+            start_range,
+            end_range,
+            detection_key,
+            output_dir,
+        } => {}
     }
+    // let val = std::env::args().nth(1).map(|v| {
+    //     v.as_str()
+    //         .parse::<usize>()
+    //         .expect("Choose 1 to run demo. Choose 2 to display detection key size")
+    // });
+
+    // match val {
+    //     Some(1) => run(),
+    //     Some(2) => calculate_detection_key_size(),
+    //     _ => {
+    //         println!("Choose 1 to run demo. Choose 2 to display detection key size")
+    //     }
+    // }
 }

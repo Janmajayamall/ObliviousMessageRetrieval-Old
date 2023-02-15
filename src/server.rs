@@ -733,7 +733,7 @@ mod tests {
         gen_rot_keys_inner_product, gen_rot_keys_pv_selector, map_rlks_to_multiplicators,
         powers_of_x_poly, range_fn_poly, serialize_detection_key, solve_equations,
     };
-    use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT};
+    use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, OMR_S_SIZES};
     use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
@@ -798,7 +798,7 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
                 // .set_moduli(MODULI_OMR)
-                .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
+                .set_moduli_sizes(OMR_S_SIZES)
                 // .set_moduli_sizes(&[52; 15])
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 // .set_variance(5)
@@ -1458,7 +1458,7 @@ mod tests {
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
-                .set_moduli(MODULI_OMR)
+                .set_moduli_sizes(OMR_S_SIZES)
                 // .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
                 .build()
                 .unwrap(),

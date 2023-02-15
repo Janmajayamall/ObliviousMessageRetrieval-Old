@@ -20,9 +20,10 @@ statrs = "0.16.0"
 ndarray = "0.15.6"
 serde = { version = "1.0", features = ["derive"] }
 protobuf = "3.2.0"
+clap = { version = "4.1.4", features = ["derive"] }
 
 [patch.crates-io]
-fhe = { path = "./../fhe.rs/crates/fhe" }
-fhe-util = {path = "./../fhe.rs/crates/fhe-util" }
-fhe-traits = {path = "./../fhe.rs/crates/fhe-traits" }
-fhe-math = {path = "./../fhe.rs/crates/fhe-math" }
+fhe = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
+fhe-util = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
+fhe-traits = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
+fhe-math = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }

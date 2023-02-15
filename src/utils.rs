@@ -422,15 +422,15 @@ pub fn serialize_detection_key(key: &DetectionKey) -> Vec<u8> {
 
 pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> DetectionKey {
     // debug_assert!(bytes.len() == )
-    let ek1 = EvaluationKey::from_bytes(&bytes[..3030031], bfv_params).unwrap();
-    let ek2 = EvaluationKey::from_bytes(&bytes[3030031..3662602], bfv_params).unwrap();
-    let ek3 = EvaluationKey::from_bytes(&bytes[3662602..4736533], bfv_params).unwrap();
+    let ek1 = EvaluationKey::from_bytes(&bytes[..49889596], bfv_params).unwrap();
+    let ek2 = EvaluationKey::from_bytes(&bytes[49889596..58737190], bfv_params).unwrap();
+    let ek3 = EvaluationKey::from_bytes(&bytes[58737190..77170416], bfv_params).unwrap();
 
     let mut pvw_sk_cts = [
-        Ciphertext::from_bytes(&bytes[4736533..4938566], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[4938566..5140599], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[5140599..5342632], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[5342632..5544665], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[77170416..80496420], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[80496420..83822424], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[83822424..87148428], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[87148428..90474432], bfv_params).unwrap(),
     ];
 
     let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
@@ -442,16 +442,16 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
             );
         };
     }
-    rlk!(1, 5544665..8157654);
-    rlk!(2, 8157654..10484164);
-    rlk!(3, 10484164..12533410);
-    rlk!(4, 12533410..14242929);
-    rlk!(5, 14242929..15643441);
-    rlk!(6, 15643441..16765666);
-    rlk!(7, 16765666..17640324);
-    rlk!(8, 17640324..18298135);
-    rlk!(9, 18298135..18769819);
-    rlk!(10, 18769819..19086096);
+    rlk!(1, 90474432..133597415);
+    rlk!(2, 133597415..172042748);
+    rlk!(3, 172042748..205957887);
+    rlk!(4, 205957887..234343408);
+    rlk!(5, 234343408..257690831);
+    rlk!(6, 257690831..276491658);
+    rlk!(7, 276491658..291237429);
+    rlk!(8, 291237429..302419664);
+    rlk!(9, 302419664..310529883);
+    rlk!(10, 310529883..316059606);
 
     DetectionKey {
         ek1,
@@ -475,7 +475,7 @@ pub fn serialize_message_digest(digest: &MessageDigest) -> Vec<u8> {
 }
 
 pub fn deserialize_message_digest(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> MessageDigest {
-    let ct_size = 14364;
+    let ct_size = 327714;
     let mut offset = 0;
 
     let mut seed = [0u8; 32];
@@ -556,7 +556,7 @@ pub fn gen_paylods(size: usize) -> Vec<Vec<u64>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, VARIANCE};
+    use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, OMR_S_SIZES, VARIANCE};
 
     use super::*;
     use fhe::bfv::BfvParametersBuilder;
@@ -616,7 +616,7 @@ mod tests {
         let par = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
-                .set_moduli(MODULI_OMR)
+                .set_moduli_sizes(OMR_S_SIZES)
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 .set_variance(VARIANCE)
                 .build()
@@ -664,7 +664,7 @@ mod tests {
         let par = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
-                .set_moduli(MODULI_OMR)
+                .set_moduli_sizes(OMR_S_SIZES)
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 .set_variance(VARIANCE)
                 .build()
@@ -683,8 +683,9 @@ mod tests {
     #[test]
     fn print_rlk_macro() {
         let r = vec![
-            3030031, 3662602, 4736533, 4938566, 5140599, 5342632, 5544665, 8157654, 10484164,
-            12533410, 14242929, 15643441, 16765666, 17640324, 18298135, 18769819, 19086096,
+            49889596, 58737190, 77170416, 80496420, 83822424, 87148428, 90474432, 133597415,
+            172042748, 205957887, 234343408, 257690831, 276491658, 291237429, 302419664, 310529883,
+            316059606,
         ];
         for i in (7..r.len()) {
             println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);
