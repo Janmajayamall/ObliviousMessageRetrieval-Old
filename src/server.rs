@@ -622,7 +622,7 @@ pub fn phase1(
         .par_chunks(degree)
         .enumerate()
         .map(|(index, c)| {
-            println!("Starting Phase 1 batch: {{index}}");
+            println!("Starting Phase 1 batch: {index}");
             let mut now = std::time::Instant::now();
 
             // level 0
@@ -661,7 +661,7 @@ pub fn phase1(
             //     );
             // }
             // println!();
-            println!("Phase 1 batch {{index}} time: {:?}", now.elapsed());
+            println!("Phase 1 batch {index} time: {:?}", now.elapsed());
             ranged_decrypted_clues[0].clone()
         })
         .collect();
@@ -825,9 +825,9 @@ pub fn phase2_omd(
     sk: &SecretKey,
 ) -> Ciphertext {
     let mut pertinency_cts = pertinency_cts.to_vec();
-    while pertinency_cts.len() < 16 {
-        pertinency_cts.push(pertinency_cts[0].clone());
-    }
+    // while pertinency_cts.len() < 16 {
+    //     pertinency_cts.push(pertinency_cts[0].clone());
+    // }
     // {
     //     println!();
     //     pertinency_cts.iter().for_each(|c| unsafe {

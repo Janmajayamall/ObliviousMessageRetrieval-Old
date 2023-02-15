@@ -55,6 +55,7 @@ fn run() {
 
     let mut pertinent_indices = gen_pertinent_indices(100, SET_SIZE);
     pertinent_indices.sort();
+    println!("Total messages: {SET_SIZE}");
     println!("Pertinent indices: {:?}", pertinent_indices);
 
     let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, SET_SIZE);
