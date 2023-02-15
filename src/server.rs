@@ -208,20 +208,6 @@ pub fn range_fn(
         multiplicators,
         level_offset + 4,
     );
-    println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
-
-    unsafe {
-        println!(
-            "k_powers_of_x noise: {}",
-            sk.measure_noise(&k_powers_of_x[k_powers_of_x.len() - 1])
-                .unwrap()
-        );
-        println!(
-            "k_powers_of_m noise: {}",
-            sk.measure_noise(&k_powers_of_m[k_powers_of_m.len() - 1])
-                .unwrap()
-        );
-    }
 
     for p in &mut k_powers_of_x {
         for _ in 0..4 {
@@ -236,7 +222,6 @@ pub fn range_fn(
         let mut sum: Ciphertext = Ciphertext::zero(bfv_params);
         let mut flag = false;
 
-        // now = std::time::SystemTime::now();
         for j in 1..257 {
             let c = coeffs[(i * 256) + (j - 1)];
 
@@ -247,9 +232,7 @@ pub fn range_fn(
             )
             .unwrap();
 
-            // now = std::time::SystemTime::now();
             let scalar_product = &k_powers_of_x[j - 1] * &c_pt;
-            // println!(" scalar product {} {} {:?}", i, j, now.elapsed().unwrap());
 
             if !flag {
                 sum = scalar_product;
@@ -258,12 +241,6 @@ pub fn range_fn(
                 sum += &scalar_product;
             }
         }
-
-        // unsafe {
-        //     dbg!("sum noise: ", sk.measure_noise(&sum));
-        // }
-
-        // println!(" sum for index {} {:?}", i, now.elapsed().unwrap());
 
         if i != 0 {
             // mul and add
@@ -275,10 +252,6 @@ pub fn range_fn(
         } else {
             total = sum;
         }
-        // println!(" total calc {} {:?}", i, now.elapsed().unwrap());
-        // unsafe {
-        //     dbg!("total noise: ", sk.measure_noise(&total));
-        // }
     }
 
     let one = Plaintext::try_encode(
@@ -290,14 +263,6 @@ pub fn range_fn(
     total = -total;
     total += &one;
     total.mod_switch_to_next_level();
-
-    unsafe {
-        println!(
-            "range_fn total noise: {}",
-            sk.measure_noise(&total).unwrap()
-        );
-        println!();
-    }
 
     total
 }
@@ -331,33 +296,14 @@ pub fn decrypt_pvw(
         let values_pt = Plaintext::try_encode(&values, Encoding::simd(), bfv_params).unwrap();
 
         for ell_index in 0..pvw_params.ell {
-            // let mut now = std::time::Instant::now();
             let product = &ct_pvw_sk[ell_index] * &values_pt;
-            // println!("&ct_pvw_sk[ell_index] * &values_pt: {:?}", now.elapsed());
-            // now = std::time::Instant::now();
             sk_a[ell_index] += &product;
-            // println!("sk_a[ell_index] += &product;: {:?}", now.elapsed());
 
-            // rotate left by 1
-            // now = std::time::Instant::now();
             ct_pvw_sk[ell_index] = rotation_key
                 .rotates_columns_by(&ct_pvw_sk[ell_index], 1)
                 .unwrap();
-            // println!("ct_pvw_sk[ell_index] rotate l by 1: {:?}", now.elapsed());
-
-            // unsafe {
-            //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
-            //     dbg!(sk.measure_noise(&sk_a[ell_index]));
-            // }
         }
     }
-
-    // for ell_index in 0..pvw_params.ell {
-    // unsafe {
-    //     dbg!(sk.measure_noise(&ct_pvw_sk[ell_index]));
-    //     dbg!(sk.measure_noise(&sk_a[ell_index]));
-    // }
-    // }
 
     // let mut now = std::time::Instant::now();
     for p in &mut sk_a {
@@ -380,33 +326,10 @@ pub fn decrypt_pvw(
         }
         let b_ell = Plaintext::try_encode(&b_ell, Encoding::simd(), bfv_params).unwrap();
 
-        // now = std::time::Instant::now();
         sk_a[ell_index] += &b_ell;
-        // println!("sk_a[ell_index] += &b_ell: {:?}", now.elapsed());
-
-        unsafe {
-            println!(
-                "sk_a[ell_index] before noise: {}",
-                sk.measure_noise(&sk_a[ell_index]).unwrap()
-            );
-        }
 
         sk_a[ell_index].mod_switch_to_next_level();
-
-        unsafe {
-            println!(
-                "sk_a[ell_index] after noise: {}",
-                sk.measure_noise(&sk_a[ell_index]).unwrap()
-            );
-        }
     }
-
-    // // reduce noise of cts in d
-    // for v in &mut sk_a {
-    //     // now = std::time::Instant::now();
-    //     v.mod_switch_to_next_level();
-    //     // println!("v.mod_switch_to_next_level(): {:?}", now.elapsed());
-    // }
 
     sk_a
 }
@@ -445,39 +368,10 @@ pub fn pv_unpack(
 
         let mut value_vec = &*pv_ct * &select_pt;
 
-        println!();
-        println!(
-            "value_vec {}: {}",
-            i,
-            Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
-                [0]
-        );
-
-        unsafe {
-            println!("pv_ct noise: {}", sk.measure_noise(&pv_ct).unwrap());
-            println!("value_vec noise: {}", sk.measure_noise(&value_vec).unwrap());
-        }
-
         value_vec.mod_switch_to_next_level();
         value_vec.mod_switch_to_next_level();
-
-        unsafe {
-            println!(
-                "value_vec noise after 2 mod switch: {}",
-                sk.measure_noise(&value_vec).unwrap()
-            );
-        }
 
         value_vec = inner_sum_rot_keys.computes_inner_sum(&value_vec).unwrap();
-
-        unsafe {
-            println!(
-                "value_vec noise after inner sum : {}",
-                sk.measure_noise(&value_vec).unwrap()
-            );
-        }
-
-        println!();
 
         pv.push(value_vec);
     }
@@ -510,13 +404,6 @@ pub fn pv_compress(
 
         // pv_i * select_i
         let product = &pv[i] * &select_pt;
-
-        unsafe {
-            println!(
-                "pv_i * select_i noise: {}",
-                sk.measure_noise(&product).unwrap()
-            )
-        }
 
         *compressed_pv += &product;
 
@@ -654,13 +541,6 @@ pub fn phase1(
             // assert!(ranged_decrypted_clues.len() == 1);
             // level 11; mul_many consumes 1
 
-            unsafe {
-                println!(
-                    "ranged_decrypted_clues[0] noise: {}",
-                    sk.measure_noise(&ranged_decrypted_clues[0]).unwrap()
-                );
-            }
-
             ranged_decrypted_clues[0].clone()
         })
         .collect();
@@ -725,16 +605,6 @@ pub fn phase2(
                     level,
                 );
 
-                unpacked_cts.iter().enumerate().for_each(|(index, ct)| {
-                    let p = Vec::<u64>::try_decode(&sk.try_decrypt(ct).unwrap(), Encoding::simd())
-                        .unwrap();
-                    println!(
-                        "unpacked {}: {}",
-                        index + (i * batch_size),
-                        p.iter().product::<u64>()
-                    );
-                });
-
                 // level 13; unpacking consumes 2 levels
                 pv_compress(
                     bfv_params,
@@ -780,38 +650,9 @@ pub fn phase2(
         });
     });
 
-    // unsafe {
-    //     println!(
-    //         "noise in pertinency_vectors[0] {}",
-    //         sk.measure_noise(&pertinency_vectors[0]).unwrap()
-    //     );
-    //     println!(
-    //         "noise in pv before mod switch {}",
-    //         sk.measure_noise(&pv).unwrap()
-    //     );
-    //     let mut p1 = pv.clone();
-    //     p1.mod_switch_to_next_level();
-
-    //     let mut p2 = pv.clone();
-    //     p2.mod_switch_to_last_level();
-    unsafe {
-        println!("pv noise{}", sk.measure_noise(&pv).unwrap());
-    }
-    //     println!(
-    //         "noise in pv after mod switch to last level {}",
-    //         sk.measure_noise(&p2).unwrap()
-    //     );
-    // }
-
     pv.mod_switch_to_last_level();
     for r in &mut rhs_total {
         r.mod_switch_to_last_level();
-    }
-    unsafe {
-        println!(
-            "pv after mod switch noise: {}",
-            sk.measure_noise(&pv).unwrap()
-        );
     }
 
     (pv, rhs_total)
@@ -1618,6 +1459,7 @@ mod tests {
                 .set_degree(DEGREE)
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 .set_moduli(MODULI_OMR)
+                // .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
                 .build()
                 .unwrap(),
         );
