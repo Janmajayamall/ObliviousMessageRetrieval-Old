@@ -196,7 +196,7 @@ pub fn range_fn(
     let mut now = std::time::SystemTime::now();
     // all k_powers_of_x are at level `level_offset` + 4
     let mut k_powers_of_x = powers_of_x(input, 256, bfv_params, multiplicators, level_offset);
-    println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
+    // println!(" k_powers_of_x {:?}", now.elapsed().unwrap());
 
     now = std::time::SystemTime::now();
     // m = x^256
@@ -208,20 +208,20 @@ pub fn range_fn(
         multiplicators,
         level_offset + 4,
     );
-    println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
+    // println!(" k_powers_of_m {:?}", now.elapsed().unwrap());
 
-    unsafe {
-        println!(
-            "k_powers_of_x noise: {}",
-            sk.measure_noise(&k_powers_of_x[k_powers_of_x.len() - 1])
-                .unwrap()
-        );
-        println!(
-            "k_powers_of_m noise: {}",
-            sk.measure_noise(&k_powers_of_m[k_powers_of_m.len() - 1])
-                .unwrap()
-        );
-    }
+    // unsafe {
+    //     println!(
+    //         "k_powers_of_x noise: {}",
+    //         sk.measure_noise(&k_powers_of_x[k_powers_of_x.len() - 1])
+    //             .unwrap()
+    //     );
+    //     println!(
+    //         "k_powers_of_m noise: {}",
+    //         sk.measure_noise(&k_powers_of_m[k_powers_of_m.len() - 1])
+    //             .unwrap()
+    //     );
+    // }
 
     for p in &mut k_powers_of_x {
         for _ in 0..4 {
@@ -291,12 +291,12 @@ pub fn range_fn(
     total += &one;
     total.mod_switch_to_next_level();
 
-    unsafe {
-        println!(
-            "range_fn total noise: {}",
-            sk.measure_noise(&total).unwrap()
-        );
-    }
+    // unsafe {
+    //     println!(
+    //         "range_fn total noise: {}",
+    //         sk.measure_noise(&total).unwrap()
+    //     );
+    // }
 
     total
 }
@@ -383,21 +383,21 @@ pub fn decrypt_pvw(
         sk_a[ell_index] += &b_ell;
         // println!("sk_a[ell_index] += &b_ell: {:?}", now.elapsed());
 
-        unsafe {
-            println!(
-                "sk_a[ell_index] before noise: {}",
-                sk.measure_noise(&sk_a[ell_index]).unwrap()
-            );
-        }
+        // unsafe {
+        //     println!(
+        //         "sk_a[ell_index] before noise: {}",
+        //         sk.measure_noise(&sk_a[ell_index]).unwrap()
+        //     );
+        // }
 
         sk_a[ell_index].mod_switch_to_next_level();
 
-        unsafe {
-            println!(
-                "sk_a[ell_index] after noise: {}",
-                sk.measure_noise(&sk_a[ell_index]).unwrap()
-            );
-        }
+        // unsafe {
+        //     println!(
+        //         "sk_a[ell_index] after noise: {}",
+        //         sk.measure_noise(&sk_a[ell_index]).unwrap()
+        //     );
+        // }
     }
 
     // // reduce noise of cts in d
@@ -444,39 +444,39 @@ pub fn pv_unpack(
 
         let mut value_vec = &*pv_ct * &select_pt;
 
-        println!();
-        println!(
-            "value_vec {}: {}",
-            i,
-            Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
-                [0]
-        );
+        // println!();
+        // println!(
+        //     "value_vec {}: {}",
+        //     i,
+        //     Vec::<u64>::try_decode(&sk.try_decrypt(&value_vec).unwrap(), Encoding::simd()).unwrap()
+        //         [0]
+        // );
 
-        unsafe {
-            println!("pv_ct noise: {}", sk.measure_noise(&pv_ct).unwrap());
-            println!("value_vec noise: {}", sk.measure_noise(&value_vec).unwrap());
-        }
+        // unsafe {
+        //     println!("pv_ct noise: {}", sk.measure_noise(&pv_ct).unwrap());
+        //     println!("value_vec noise: {}", sk.measure_noise(&value_vec).unwrap());
+        // }
 
         value_vec.mod_switch_to_next_level();
         value_vec.mod_switch_to_next_level();
 
-        unsafe {
-            println!(
-                "value_vec noise after 2 mod switch: {}",
-                sk.measure_noise(&value_vec).unwrap()
-            );
-        }
+        // unsafe {
+        //     println!(
+        //         "value_vec noise after 2 mod switch: {}",
+        //         sk.measure_noise(&value_vec).unwrap()
+        //     );
+        // }
 
         value_vec = inner_sum_rot_keys.computes_inner_sum(&value_vec).unwrap();
 
-        unsafe {
-            println!(
-                "value_vec noise after inner sum : {}",
-                sk.measure_noise(&value_vec).unwrap()
-            );
-        }
+        // unsafe {
+        //     println!(
+        //         "value_vec noise after inner sum : {}",
+        //         sk.measure_noise(&value_vec).unwrap()
+        //     );
+        // }
 
-        println!();
+        // println!();
 
         pv.push(value_vec);
     }
@@ -510,12 +510,12 @@ pub fn pv_compress(
         // pv_i * select_i
         let product = &pv[i] * &select_pt;
 
-        unsafe {
-            println!(
-                "pv_i * select_i noise: {}",
-                sk.measure_noise(&product).unwrap()
-            )
-        }
+        // unsafe {
+        //     println!(
+        //         "pv_i * select_i noise: {}",
+        //         sk.measure_noise(&product).unwrap()
+        //     )
+        // }
 
         *compressed_pv += &product;
 
@@ -618,15 +618,15 @@ pub fn phase1(
     let set_size = clues.len();
     let degree = bfv_params.degree();
 
-    println!("Phase 1 chunk count {}", set_size / degree);
-
     let res: Vec<Ciphertext> = clues
         .par_chunks(degree)
-        .map(|c| {
-            //
+        .enumerate()
+        .map(|(index, c)| {
+            println!("Starting Phase 1 batch: {{index}}");
+            let mut now = std::time::Instant::now();
 
             // level 0
-            let mut now = std::time::Instant::now();
+            // now = std::time::Instant::now();
             let decrypted_clues = decrypt_pvw(
                 bfv_params,
                 pvw_params,
@@ -635,33 +635,33 @@ pub fn phase1(
                 c,
                 sk,
             );
-            println!();
-            println!("Decrypt_pvw_time {:?}", now.elapsed());
+            // println!();
+            // println!("Decrypt_pvw_time {:?}", now.elapsed());
             // assert!(decrypted_clues.len() == pvw_params.ell);
 
             // level 1; decryption consumes 1
-            now = std::time::Instant::now();
+            // now = std::time::Instant::now();
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
                 .map(|d| range_fn(bfv_params, d, multiplicators, 1, "params_850.bin", sk))
                 .collect_vec();
-            println!("range time {:?}", now.elapsed());
+            // println!("range time {:?}", now.elapsed());
 
             // level 10; range fn consumes 9
-            now = std::time::Instant::now();
+            // now = std::time::Instant::now();
             mul_many(&mut ranged_decrypted_clues, multiplicators, 10);
-            println!("mul_many time {:?}", now.elapsed());
+            // println!("mul_many time {:?}", now.elapsed());
             // assert!(ranged_decrypted_clues.len() == 1);
             // level 11; mul_many consumes 1
 
-            unsafe {
-                println!(
-                    "ranged_decrypted_clues[0] noise: {}",
-                    sk.measure_noise(&ranged_decrypted_clues[0]).unwrap()
-                );
-            }
-            println!();
-
+            // unsafe {
+            //     println!(
+            //         "ranged_decrypted_clues[0] noise: {}",
+            //         sk.measure_noise(&ranged_decrypted_clues[0]).unwrap()
+            //     );
+            // }
+            // println!();
+            println!("Phase 1 batch {{index}} time: {:?}", now.elapsed());
             ranged_decrypted_clues[0].clone()
         })
         .collect();
@@ -705,7 +705,7 @@ pub fn phase2(
         .par_iter_mut()
         .enumerate()
         .map(|(core_index, p_ct)| {
-            println!("Phase2...core:{core_index}");
+            // println!("Phase2...core:{core_index}");
 
             let mut pv = Ciphertext::zero(bfv_params);
             let compress_offset = core_index * degree;
@@ -726,15 +726,15 @@ pub fn phase2(
                     level,
                 );
 
-                unpacked_cts.iter().enumerate().for_each(|(index, ct)| {
-                    let p = Vec::<u64>::try_decode(&sk.try_decrypt(ct).unwrap(), Encoding::simd())
-                        .unwrap();
-                    println!(
-                        "unpacked {}: {}",
-                        index + (i * batch_size),
-                        p.iter().product::<u64>()
-                    );
-                });
+                // unpacked_cts.iter().enumerate().for_each(|(index, ct)| {
+                //     let p = Vec::<u64>::try_decode(&sk.try_decrypt(ct).unwrap(), Encoding::simd())
+                //         .unwrap();
+                //     println!(
+                //         "unpacked {}: {}",
+                //         index + (i * batch_size),
+                //         p.iter().product::<u64>()
+                //     );
+                // });
 
                 // level 13; unpacking consumes 2 levels
                 pv_compress(
@@ -795,9 +795,9 @@ pub fn phase2(
 
     //     let mut p2 = pv.clone();
     //     p2.mod_switch_to_last_level();
-    unsafe {
-        println!("pv noise{}", sk.measure_noise(&pv).unwrap());
-    }
+    // unsafe {
+    //     println!("pv noise{}", sk.measure_noise(&pv).unwrap());
+    // }
     //     println!(
     //         "noise in pv after mod switch to last level {}",
     //         sk.measure_noise(&p2).unwrap()
@@ -808,17 +808,17 @@ pub fn phase2(
     for r in &mut rhs_total {
         r.mod_switch_to_last_level();
     }
-    unsafe {
-        println!(
-            "pv after mod switch noise: {}",
-            sk.measure_noise(&pv).unwrap()
-        );
-    }
+    // unsafe {
+    //     println!(
+    //         "pv after mod switch noise: {}",
+    //         sk.measure_noise(&pv).unwrap()
+    //     );
+    // }
 
     (pv, rhs_total)
 }
 
-fn phase2_omd(
+pub fn phase2_omd(
     pertinency_cts: &mut [Ciphertext],
     bfv_params: &Arc<BfvParameters>,
     level: usize,
@@ -828,13 +828,13 @@ fn phase2_omd(
     while pertinency_cts.len() < 16 {
         pertinency_cts.push(pertinency_cts[0].clone());
     }
-    {
-        println!();
-        pertinency_cts.iter().for_each(|c| unsafe {
-            println!("pv ct noise: {}", sk.measure_noise(&c).unwrap());
-        });
-        println!();
-    }
+    // {
+    //     println!();
+    //     pertinency_cts.iter().for_each(|c| unsafe {
+    //         println!("pv ct noise: {}", sk.measure_noise(&c).unwrap());
+    //     });
+    //     println!();
+    // }
     pertinency_cts
         .iter_mut()
         .enumerate()
@@ -853,26 +853,26 @@ fn phase2_omd(
         .iter()
         .enumerate()
         .for_each(|(index, pv_ct)| {
-            unsafe {
-                println!(
-                    "pv multiplied index:{} noise: {}",
-                    index,
-                    sk.measure_noise(&pv_ct).unwrap()
-                );
-            }
+            // unsafe {
+            //     println!(
+            //         "pv multiplied index:{} noise: {}",
+            //         index,
+            //         sk.measure_noise(&pv_ct).unwrap()
+            //     );
+            // }
             digest += pv_ct;
         });
 
-    unsafe {
-        println!("Digest noise: {}", sk.measure_noise(&digest).unwrap());
-    }
+    // unsafe {
+    //     println!("Digest noise: {}", sk.measure_noise(&digest).unwrap());
+    // }
     digest.mod_switch_to_last_level();
-    unsafe {
-        println!(
-            "Digest (after mod to last_level) noise: {}",
-            sk.measure_noise(&digest).unwrap()
-        );
-    }
+    // unsafe {
+    //     println!(
+    //         "Digest (after mod to last_level) noise: {}",
+    //         sk.measure_noise(&digest).unwrap()
+    //     );
+    // }
 
     digest
 }
@@ -896,11 +896,11 @@ pub fn server_process(
     println!("Phase 1...");
     let mut now = std::time::Instant::now();
     let mut pertinency_cts = phase1(
-        &bfv_params,
+        bfv_params,
         &pvw_params,
         &detection_key.pvw_sk_cts,
         &detection_key.ek1,
-        &multiplicators,
+        multiplicators,
         clues,
         &dummy_bfv_sk,
     );
@@ -918,7 +918,7 @@ pub fn server_process(
     let (pv_ct, msg_cts) = phase2(
         &assigned_buckets,
         &assigned_weights,
-        &bfv_params,
+        bfv_params,
         &detection_key.ek2,
         &detection_key.ek3,
         &mut pertinency_cts,
@@ -965,8 +965,6 @@ mod tests {
     use rand::distributions::Uniform;
     use rand::prelude::Distribution;
     use rand::{thread_rng, Rng};
-    use std::hash::Hash;
-    use std::io::Write;
 
     #[test]
     fn server_process_test() {
@@ -1015,17 +1013,11 @@ mod tests {
     #[test]
     fn test_phase1_and_phase2_omd() {
         let mut rng = thread_rng();
-        // let f = [28, 39, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60];
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
-                // .set_moduli(MODULI_OMR)
                 .set_moduli_sizes(&[50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
-                // .set_moduli_sizes(&[52; 14])
-                // .set_moduli_sizes(&[40, 50, 60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 30, 60])
-                // .set_moduli_sizes(&[52; 15])
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
-                // .set_variance(5)
                 .build()
                 .unwrap(),
         );
