@@ -12,6 +12,52 @@ use rand::{thread_rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use std::sync::Arc;
 use std::vec;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    CalculateDetectionKeySize,
+    Demo,
+    CreateDigest {
+        #[arg(short, long)]
+        detection_key: std::path::PathBuf,
+
+        #[arg(short, long)]
+        clues: std::path::PathBuf,
+
+        #[arg(short, long)]
+        messages: std::path::PathBuf,
+
+        #[arg(short, long)]
+        from_tx: u64,
+
+        #[arg(short, long)]
+        num_messages: u64,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match &cli.command {
+        Commands::CalculateDetectionKeySize {} => {
+            calculate_detection_key_size()
+        }
+        Commands::Demo {} => {
+            run_demo()
+        }
+        Commands::CreateDigest { detection_key, clues, messages, from_tx, num_messages } => {
+            println!("TODO")
+        }
+    }
+}
 
 fn calculate_detection_key_size() {
     let mut rng = thread_rng();
@@ -31,7 +77,7 @@ fn calculate_detection_key_size() {
     println!("Detection key size: {}MB", s.len() as f64 / 1000000.0)
 }
 
-fn run() {
+fn run_demo() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -120,20 +166,4 @@ fn run() {
     println!("Total client time: {:?}", now.elapsed());
 
     assert_eq!(pertinent_payloads, res_payloads);
-}
-
-fn main() {
-    let val = std::env::args().nth(1).map(|v| {
-        v.as_str()
-            .parse::<usize>()
-            .expect("Choose 1 to run demo. Choose 2 to display detection key size")
-    });
-
-    match val {
-        Some(1) => run(),
-        Some(2) => calculate_detection_key_size(),
-        _ => {
-            println!("Choose 1 to run demo. Choose 2 to display detection key size")
-        }
-    }
 }

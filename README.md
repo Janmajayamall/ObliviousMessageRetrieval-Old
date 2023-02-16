@@ -34,8 +34,8 @@ Server comes to Alice's rescue, by enabling Oblivious message retrieval. All Ali
 
 1. `git clone https://github.com/Janmajayamall/ObliviousMessageRetrieval.git`.
 2. `cd ObliviousMessageRetrieval`
-3. To run demo, `cargo run --release 1`.
-4. To _detection key size_ run `cargo run --release 2`.
+3. To run demo, `cargo run --release demo`.
+4. To calculate detection key size run `cargo run --release calculate-detection-key-size`.
 
 In demo, transactions set size is set to `2^14` and we have assumed `50` are pertinent to the client.
 
@@ -50,8 +50,8 @@ For best performance on x86 use machine with `avx512ifma` instruction set availa
 1. `git clone https://github.com/Janmajayamall/ObliviousMessageRetrieval.git`.
 2. `cd ObliviousMessageRetrieval`
 3. set `export RUSTFLAGS="-O -C target-feature=+avx512ifma"`
-4. To run demo, `cargo run --release 1`.
-5. To _detection key size_ run `cargo run --release 2`.
+4. To run demo, `cargo run --release demo`.
+5. To calculate detection key size run `cargo run --release calculate-detection-key-size`.
 
 In demo, transactions set size is set to `2^14` and we have assumed `50` are pertinent to the client.
 
