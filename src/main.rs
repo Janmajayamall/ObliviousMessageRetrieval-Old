@@ -1,7 +1,8 @@
 #![feature(path_file_prefix)]
 use byteorder::WriteBytesExt;
 use clap::{Parser, Subcommand};
-use fhe::bfv::Plaintext;
+use fhe::bfv::{Ciphertext, Plaintext};
+use fhe_math::zq::Modulus;
 use itertools::Itertools;
 use omr::{
     client::*,
@@ -12,13 +13,14 @@ use omr::{
     utils::*,
     DEGREE, GAMMA, K, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, OMR_S_SIZES, SET_SIZE,
 };
-use rand::{thread_rng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::{
     prelude::{IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
 use std::{
+    fmt::format,
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
@@ -159,9 +161,16 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 let p_ct = inner_sum_key.computes_inner_sum(&p_ct).unwrap();
 
                 // save pertinency ciphertext
-                let name = path.file_prefix().unwrap().to_str().unwrap();
+                let name = path
+                    .file_prefix()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .chars()
+                    .next()
+                    .unwrap();
                 let mut file_path = p_path.clone();
-                file_path.push(name);
+                file_path.push(format!("{name}"));
 
                 if std::fs::File::create(file_path.clone())
                     .and_then(|mut f| f.write_all(&p_ct.to_bytes()))
@@ -175,8 +184,114 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
         });
 }
 
-fn create_digest() { 
-    
+fn create_digest(
+    messages: PathBuf,
+    pertinency_cts: PathBuf,
+    output_dir: PathBuf,
+    from_tx: usize,
+    num_messages: usize,
+) {
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .set_moduli_sizes(OMR_S_SIZES)
+            .build()
+            .unwrap(),
+    );
+
+    let mut pv_ct = Ciphertext::zero(&bfv_params);
+    let mut msg_ct = Ciphertext::zero(&bfv_params);
+
+    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
+    thread_rng().fill(&mut seed);
+    let mut rng = ChaChaRng::from_seed(seed);
+
+    let k = 50;
+    let m = k * 2;
+    let gamma = 5;
+    let bucket_row_span = 256;
+    let (assigned_buckets, assigned_weights) =
+        assign_buckets(m, gamma, MODULI_OMR_PT[0], num_messages, &mut rng);
+    let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
+
+    (from_tx..from_tx + num_messages)
+        .into_iter()
+        .for_each(|index| {
+            let mut path = pertinency_cts.clone();
+            path.push(format!("{index}"));
+            match std::fs::read(path) {
+                Ok(p_bytes) => match Ciphertext::from_bytes(&p_bytes, &bfv_params) {
+                    Ok(mut pertinency_ct) => {
+                        // read message
+                        let mut msg_path = messages.clone();
+                        msg_path.push(format!("{index}"));
+                        match std::fs::read(msg_path) {
+                            Ok(mut message_bytes) => {
+                                // pad message bytes
+                                while message_bytes.len() < 512 {
+                                    message_bytes.push(0u8);
+                                }
+
+                                // change to base 16
+                                let message_bytes = message_bytes
+                                    .chunks(2)
+                                    .map(|two_bytes| {
+                                        (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 16)
+                                    })
+                                    .collect_vec();
+
+                                // change bit in pv_ct
+                                let mut pt = vec![0u64; bfv_params.degree()];
+                                pt[(index - from_tx) / 16] = 1u64 << ((index - from_tx) % 16);
+                                let pt = Plaintext::try_encode(
+                                    &pt,
+                                    Encoding::simd_at_level(13),
+                                    &bfv_params,
+                                )
+                                .unwrap();
+
+                                // add to pv
+                                pv_ct += &(&pertinency_ct * &pt);
+
+                                // add to msg_ct
+                                let mut m_pt = vec![0u64; bfv_params.degree()];
+                                (0..gamma).into_iter().for_each(|i| {
+                                    let bucket = assigned_buckets[index - from_tx][i];
+                                    let weight = assigned_weights[index - from_tx][i];
+                                    let row_offset = bucket * bucket_row_span;
+                                    (0..bucket_row_span).into_iter().for_each(|j| {
+                                        m_pt[row_offset + j] = q_mod.mul(weight, message_bytes[j]);
+                                    });
+                                });
+                                let m_pt = Plaintext::try_encode(
+                                    &m_pt,
+                                    Encoding::simd_at_level(13),
+                                    &bfv_params,
+                                )
+                                .unwrap();
+                                pertinency_ct *= &m_pt;
+                                msg_ct += &pertinency_ct;
+                            }
+                            Err(e) => {}
+                        }
+                    }
+                    Err(e) => {}
+                },
+                Err(e) => {}
+            }
+        });
+
+    pv_ct.mod_switch_to_last_level();
+    msg_ct.mod_switch_to_last_level();
+
+    let digest = MessageDigest {
+        pv: pv_ct,
+        msgs: vec![msg_ct],
+        seed,
+    };
+
+    //TODO: serialize and store message digest.
 }
 
 fn main() {
@@ -193,97 +308,6 @@ fn main() {
             output_dir,
             from_tx,
             num_messages,
-        } => {}
+        } => create_digest(messages, pertinency_cts, output_dir, from_tx, num_messages),
     }
-}
-
-fn run() {
-    let mut rng = thread_rng();
-    let bfv_params = Arc::new(
-        BfvParametersBuilder::new()
-            .set_degree(DEGREE)
-            .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli(MODULI_OMR)
-            .build()
-            .unwrap(),
-    );
-    let pt_bits = (64 - bfv_params.plaintext().leading_zeros() - 1) as usize;
-    let pvw_params = Arc::new(PvwParameters::default());
-
-    // CLIENT SETUP //
-    let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    let pvw_pk = pvw_sk.public_key(&mut rng);
-
-    // pvw secret key encrypted under bfv
-    println!("Generating client keys");
-    let d_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-    let multiplicators = map_rlks_to_multiplicators(&d_key.rlk_keys);
-
-    let mut pertinent_indices = gen_pertinent_indices(50, SET_SIZE);
-    pertinent_indices.sort();
-    println!("Pertinent indices: {:?}", pertinent_indices);
-    let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, SET_SIZE);
-    let payloads = gen_paylods(SET_SIZE);
-
-    let mut pertinent_payloads = vec![];
-    (0..SET_SIZE)
-        .zip(payloads.iter())
-        .for_each(|(index, load)| {
-            if pertinent_indices.contains(&index) {
-                pertinent_payloads.push(load.clone());
-            }
-        });
-
-    // SERVER SIDE //
-    println!("Server: Starting OMR...");
-    let now = std::time::Instant::now();
-    let message_digest = server_process(&bfv_params, &clues, &payloads, &d_key, &multiplicators);
-    println!("Total server time: {:?}", now.elapsed());
-
-    // CLIENT SIDE //
-    println!("Client: Processing digest");
-    let now = std::time::Instant::now();
-
-    let pt = bfv_sk.try_decrypt(&message_digest.pv).unwrap();
-    let pv_values = Vec::<u64>::try_decode(&pt, Encoding::simd()).unwrap();
-    let pv = pv_decompress(&pv_values, pt_bits);
-    // {
-    //     let mut res_indices = vec![];
-    //     pv.iter().enumerate().for_each(|(index, bit)| {
-    //         if *bit == 1 {
-    //             res_indices.push(index);
-    //         }
-    //     });
-    //     pertinent_indices.sort();
-    //     assert_eq!(pertinent_indices, res_indices);
-    //     // println!("Expected indices {:?}", pertinent_indices);
-    //     // println!("Res indices      {:?}", res_indices);
-    //     // assert!(false);
-    // }
-    let mut rng = ChaChaRng::from_seed(message_digest.seed);
-    let (assigned_buckets, assigned_weights) =
-        assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
-    let lhs = construct_lhs(
-        &pv,
-        assigned_buckets,
-        assigned_weights,
-        M,
-        K,
-        GAMMA,
-        SET_SIZE,
-    );
-
-    let m_rows = message_digest
-        .msgs
-        .iter()
-        .flat_map(|m| {
-            Vec::<u64>::try_decode(&bfv_sk.try_decrypt(m).unwrap(), Encoding::simd()).unwrap()
-        })
-        .collect_vec();
-    let rhs = construct_rhs(&m_rows, M, M_ROW_SPAN, MODULI_OMR_PT[0]);
-    let res_payloads = solve_equations(lhs, rhs, MODULI_OMR_PT[0]);
-    println!("Total client time: {:?}", now.elapsed());
-
-    assert_eq!(pertinent_payloads, res_payloads);
 }
