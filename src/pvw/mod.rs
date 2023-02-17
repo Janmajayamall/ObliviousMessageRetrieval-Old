@@ -52,7 +52,7 @@ impl PvwCiphertext {
     }
 
     pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> Option<PvwCiphertext> {
-        let from = PvwCiphertextProto::parse_from_bytes(bytes).unwrap();
+        let from = PvwCiphertextProto::parse_from_bytes(bytes).ok()?;
         let p_bits = (64 - (par.q - 1).leading_zeros()) as usize;
         let v = transcode_from_bytes(&from.v, p_bits);
         let b = v[..par.ell].to_vec();
