@@ -86,7 +86,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 
     let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
 
-    std::fs::read_dir("./target/omr-service-data/clues")
+    std::fs::read_dir(clues)
         .unwrap()
         .collect_vec()
         .par_chunks(10)
@@ -145,7 +145,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
 
             let mut p_path = output_dir.clone();
-            p_path.push("p_cts");
+            p_path.push("pertinency_cts");
             std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
 
             file_paths.iter().enumerate().for_each(|(index, path)| {
@@ -172,13 +172,15 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 let mut file_path = p_path.clone();
                 file_path.push(format!("{name}"));
 
-                if std::fs::File::create(file_path.clone())
+                match std::fs::File::create(file_path.clone())
                     .and_then(|mut f| f.write_all(&p_ct.to_bytes()))
-                    .is_ok()
                 {
-                    println!("Pertinency Ct write success: {file_path:?}");
-                } else {
-                    println!("Pertinency Ct write failed: {file_path:?}");
+                    Ok(_) => {
+                        println!("Pertinency Ct write to {file_path:?} success");
+                    }
+                    Err(e) => {
+                        println!("Pertinency Ct write to {file_path:?} failed with error: {e}");
+                    }
                 }
             });
         });
@@ -210,6 +212,7 @@ fn create_digest(
     let k = 50;
     let m = k * 2;
     let gamma = 5;
+    let message_size = 512;
     let bucket_row_span = 256;
     let (assigned_buckets, assigned_weights) =
         assign_buckets(m, gamma, MODULI_OMR_PT[0], num_messages, &mut rng);
@@ -229,7 +232,7 @@ fn create_digest(
                         match std::fs::read(msg_path) {
                             Ok(mut message_bytes) => {
                                 // pad message bytes
-                                while message_bytes.len() < 512 {
+                                while message_bytes.len() < message_size {
                                     message_bytes.push(0u8);
                                 }
 
