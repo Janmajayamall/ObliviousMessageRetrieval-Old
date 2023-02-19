@@ -692,10 +692,4 @@ mod tests {
             println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);
         }
     }
-
-    #[test]
-    fn read_and_output_detection_key() {
-        let bfv_sk = SecretKey::fromstd::fs::read().unwrap()
-        // let pvw_sk =
-    }
 }
