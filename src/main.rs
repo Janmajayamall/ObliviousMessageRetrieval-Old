@@ -16,7 +16,7 @@ use omr::{
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::{
-    prelude::{IntoParallelRefIterator, ParallelIterator},
+    prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
 use std::{
@@ -90,7 +90,10 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
         .unwrap()
         .collect_vec()
         .par_chunks(10)
-        .for_each(|files| {
+        .enumerate()
+        .for_each(|(batch_index, files)| {
+            println!("Process clue batch: {batch_index}");
+
             let file_paths = files
                 .iter()
                 .filter(|f| f.is_ok())
@@ -102,15 +105,19 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 .map(|path| match std::fs::read(path) {
                     Ok(clue) => match PvwCiphertext::from_bytes(&clue, &pvw_params) {
                         Some(clue) => clue,
-                        None => fake_clue.clone(),
+                        None => {
+                            println!("Incorrect encoding of clue at: {path:?}");
+                            fake_clue.clone()
+                        }
                     },
                     Err(e) => {
-                        // println!("{:?}", e);
+                        println!("Failed to read clue at: {path:?} due to error: {e:?}",);
                         fake_clue.clone()
                     }
                 })
                 .collect_vec();
 
+            println!("Decrypt_pvw of batch: {batch_index}");
             let decrypted_clues = decrypt_pvw(
                 &bfv_params,
                 &pvw_params,
@@ -120,6 +127,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 &fake_bfv_sk,
             );
 
+            println!("Range_fn of batch: {batch_index}");
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
                 .map(|ct| {
@@ -134,6 +142,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 })
                 .collect_vec();
 
+            println!("Mul_many of batch: {batch_index}");
             mul_many(&mut ranged_decrypted_clues, &multiplicators, 10);
 
             let left_rot_key = &detection_key.ek2;

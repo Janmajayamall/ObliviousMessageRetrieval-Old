@@ -337,7 +337,7 @@ pub fn gen_rlk_keys_levelled<R: CryptoRng + RngCore>(
 ) -> HashMap<usize, RelinearizationKey> {
     let mut keys = HashMap::<usize, RelinearizationKey>::new();
     // for powers of x; range fn;
-    for i in 1..11 {
+    for i in 1..12 {
         keys.insert(i, RelinearizationKey::new_leveled(sk, i, i, rng).unwrap());
     }
 
@@ -413,7 +413,7 @@ pub fn serialize_detection_key(key: &DetectionKey) -> Vec<u8> {
         s.extend_from_slice(i.to_bytes().as_slice());
     });
 
-    (1..11).into_iter().for_each(|i| {
+    (1..12).into_iter().for_each(|i| {
         s.extend_from_slice(key.rlk_keys.get(&i).unwrap().to_bytes().as_slice());
     });
 
@@ -452,6 +452,7 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
     rlk!(8, 291237429..302419664);
     rlk!(9, 302419664..310529883);
     rlk!(10, 310529883..316059606);
+    rlk!(11, 316059606..319500353);
 
     DetectionKey {
         ek1,
@@ -653,7 +654,7 @@ mod tests {
                 r.push(s.len());
             });
 
-            (1..11).into_iter().for_each(|i| {
+            (1..12).into_iter().for_each(|i| {
                 s.extend_from_slice(key.rlk_keys.get(&i).unwrap().to_bytes().as_slice());
                 r.push(s.len());
             });
@@ -685,10 +686,16 @@ mod tests {
         let r = vec![
             49889596, 58737190, 77170416, 80496420, 83822424, 87148428, 90474432, 133597415,
             172042748, 205957887, 234343408, 257690831, 276491658, 291237429, 302419664, 310529883,
-            316059606,
+            316059606, 319500353,
         ];
         for i in (7..r.len()) {
             println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);
         }
+    }
+
+    #[test]
+    fn read_and_output_detection_key() {
+        let bfv_sk = SecretKey::fromstd::fs::read().unwrap()
+        // let pvw_sk =
     }
 }
