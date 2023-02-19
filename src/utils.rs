@@ -617,7 +617,7 @@ mod tests {
         let par = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
-                .set_moduli_sizes(OMR_S_SIZES)
+                .set_moduli(MODULI_OMR)
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 .set_variance(VARIANCE)
                 .build()
@@ -691,5 +691,19 @@ mod tests {
         for i in (7..r.len()) {
             println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);
         }
+    }
+
+    #[test]
+    fn print_primes() {
+        let par = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_moduli_sizes(OMR_S_SIZES)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_variance(VARIANCE)
+                .build()
+                .unwrap(),
+        );
+        dbg!(par);
     }
 }
