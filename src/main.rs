@@ -58,7 +58,7 @@ enum Command {
         from_tx: usize,
 
         #[arg(short, long)]
-        num_messages: usize,
+        last_tx: usize,
     },
 }
 
@@ -193,7 +193,7 @@ fn create_digest(
     pertinency_cts: PathBuf,
     output_dir: PathBuf,
     from_tx: usize,
-    num_messages: usize,
+    last_tx: usize,
 ) {
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -217,75 +217,73 @@ fn create_digest(
     let message_size = 512;
     let bucket_row_span = 256;
     let (assigned_buckets, assigned_weights) =
-        assign_buckets(m, gamma, MODULI_OMR_PT[0], num_messages, &mut rng);
+        assign_buckets(m, gamma, MODULI_OMR_PT[0], last_tx - from_tx, &mut rng);
     let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
 
-    (from_tx..from_tx + num_messages)
-        .into_iter()
-        .for_each(|index| {
-            let mut path = pertinency_cts.clone();
-            path.push(format!("{index}"));
-            match std::fs::read(path) {
-                Ok(p_bytes) => match Ciphertext::from_bytes(&p_bytes, &bfv_params) {
-                    Ok(mut pertinency_ct) => {
-                        // read message
-                        let mut msg_path = messages.clone();
-                        msg_path.push(format!("{index}"));
-                        match std::fs::read(msg_path) {
-                            Ok(mut message_bytes) => {
-                                // pad message bytes
-                                while message_bytes.len() < message_size {
-                                    message_bytes.push(0u8);
-                                }
-
-                                // change to base 16
-                                let message_bytes = message_bytes
-                                    .chunks(2)
-                                    .map(|two_bytes| {
-                                        (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 16)
-                                    })
-                                    .collect_vec();
-
-                                // change bit in pv_ct
-                                let mut pt = vec![0u64; bfv_params.degree()];
-                                pt[(index - from_tx) / 16] = 1u64 << ((index - from_tx) % 16);
-                                let pt = Plaintext::try_encode(
-                                    &pt,
-                                    Encoding::simd_at_level(13),
-                                    &bfv_params,
-                                )
-                                .unwrap();
-
-                                // add to pv
-                                pv_ct += &(&pertinency_ct * &pt);
-
-                                // add to msg_ct
-                                let mut m_pt = vec![0u64; bfv_params.degree()];
-                                (0..gamma).into_iter().for_each(|i| {
-                                    let bucket = assigned_buckets[index - from_tx][i];
-                                    let weight = assigned_weights[index - from_tx][i];
-                                    let row_offset = bucket * bucket_row_span;
-                                    (0..bucket_row_span).into_iter().for_each(|j| {
-                                        m_pt[row_offset + j] = q_mod.mul(weight, message_bytes[j]);
-                                    });
-                                });
-                                let m_pt = Plaintext::try_encode(
-                                    &m_pt,
-                                    Encoding::simd_at_level(13),
-                                    &bfv_params,
-                                )
-                                .unwrap();
-                                pertinency_ct *= &m_pt;
-                                msg_ct += &pertinency_ct;
+    (from_tx..from_tx + last_tx).into_iter().for_each(|index| {
+        let mut path = pertinency_cts.clone();
+        path.push(format!("{index}"));
+        match std::fs::read(path) {
+            Ok(p_bytes) => match Ciphertext::from_bytes(&p_bytes, &bfv_params) {
+                Ok(mut pertinency_ct) => {
+                    // read message
+                    let mut msg_path = messages.clone();
+                    msg_path.push(format!("{index}"));
+                    match std::fs::read(msg_path) {
+                        Ok(mut message_bytes) => {
+                            // pad message bytes
+                            while message_bytes.len() < message_size {
+                                message_bytes.push(0u8);
                             }
-                            Err(e) => {}
+
+                            // change to base 16
+                            let message_bytes = message_bytes
+                                .chunks(2)
+                                .map(|two_bytes| {
+                                    (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 16)
+                                })
+                                .collect_vec();
+
+                            // change bit in pv_ct
+                            let mut pt = vec![0u64; bfv_params.degree()];
+                            pt[(index - from_tx) / 16] = 1u64 << ((index - from_tx) % 16);
+                            let pt = Plaintext::try_encode(
+                                &pt,
+                                Encoding::simd_at_level(13),
+                                &bfv_params,
+                            )
+                            .unwrap();
+
+                            // add to pv
+                            pv_ct += &(&pertinency_ct * &pt);
+
+                            // add to msg_ct
+                            let mut m_pt = vec![0u64; bfv_params.degree()];
+                            (0..gamma).into_iter().for_each(|i| {
+                                let bucket = assigned_buckets[index - from_tx][i];
+                                let weight = assigned_weights[index - from_tx][i];
+                                let row_offset = bucket * bucket_row_span;
+                                (0..bucket_row_span).into_iter().for_each(|j| {
+                                    m_pt[row_offset + j] = q_mod.mul(weight, message_bytes[j]);
+                                });
+                            });
+                            let m_pt = Plaintext::try_encode(
+                                &m_pt,
+                                Encoding::simd_at_level(13),
+                                &bfv_params,
+                            )
+                            .unwrap();
+                            pertinency_ct *= &m_pt;
+                            msg_ct += &pertinency_ct;
                         }
+                        Err(e) => {}
                     }
-                    Err(e) => {}
-                },
+                }
                 Err(e) => {}
-            }
-        });
+            },
+            Err(e) => {}
+        }
+    });
 
     pv_ct.mod_switch_to_last_level();
     msg_ct.mod_switch_to_last_level();
@@ -312,7 +310,7 @@ fn main() {
             pertinency_cts,
             output_dir,
             from_tx,
-            num_messages,
-        } => create_digest(messages, pertinency_cts, output_dir, from_tx, num_messages),
+            last_tx,
+        } => create_digest(messages, pertinency_cts, output_dir, from_tx, last_tx),
     }
 }
