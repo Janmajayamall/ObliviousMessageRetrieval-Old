@@ -766,6 +766,7 @@ mod tests {
     use rand::{thread_rng, Rng};
     use std::hash::Hash;
     use std::io::Write;
+    use std::os;
 
     #[test]
     fn server_process_test() {
@@ -1704,7 +1705,7 @@ mod tests {
     }
 
     #[test]
-    fn check_pertinency_cts() {
+    fn find_pertaining_pertinency_cts() {
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
@@ -1714,7 +1715,7 @@ mod tests {
                 .unwrap(),
         );
         let bfv_sk: Vec<i64> =
-            bincode::deserialize(&std::fs::read("generated/bfvPrivKeyRs").unwrap()).unwrap();
+            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKeyRs").unwrap()).unwrap();
         let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
 
         let mut pertinent_file_names = vec![];

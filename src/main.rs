@@ -72,50 +72,76 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
             .build()
             .unwrap(),
     );
+    let pvw_params = Arc::new(PvwParameters::default());
 
-    let fake_bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-
-    let detection_key = std::fs::read(detection_key).expect("Detection key read failed");
-    let detection_key = deserialize_detection_key(&bfv_params, &detection_key);
+    // let fake_bfv_sk = SecretKey::random(&bfv_params, &mut rng);
+    // let detection_key = std::fs::read(detection_key).expect("Detection key read failed");
+    // let detection_key = deserialize_detection_key(&bfv_params, &detection_key);
 
     // load bfv parameters
-    let pvw_params = Arc::new(PvwParameters::default());
-    let fake_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    let fake_pk = fake_sk.public_key(&mut rng);
-    let fake_clue = fake_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+
+    // let fake_clue = {
+    //     let pvw_params = Arc::new(PvwParameters::default());
+    //     let fake_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    //     let fake_pk = fake_sk.public_key(&mut rng);
+    //     fake_pk.encrypt(&[0, 0, 0, 0], &mut rng)
+    // };
+
+    //TODO: remove me
+    let (clues, detection_key, bfv_sk) = {
+        let pertinent_indices = vec![1, 2, 3];
+        let pvw_sk = PvwSecretKey::from_bytes(
+            &std::fs::read("generated/keys/cluePrivKey").unwrap(),
+            &pvw_params,
+        );
+        let pvw_pk = pvw_sk.public_key(&mut rng);
+        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, 1 << 15);
+
+        let bfv_sk: Vec<i64> =
+            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
+        let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
+        // let detection_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+        let detection_key =
+            std::fs::read("generated/keys/detectionKey").expect("Detection key read failed");
+        let detection_key = deserialize_detection_key(&bfv_params, &detection_key);
+
+        (clues, detection_key, bfv_sk)
+    };
 
     let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
 
-    std::fs::read_dir(clues)
-        .unwrap()
-        .collect_vec()
+    // std::fs::read_dir(clues)
+    //     .unwrap()
+    //     .collect_vec()
+    //     .par_chunks(1 << 15)
+    clues
         .par_chunks(1 << 15)
         .enumerate()
         .for_each(|(batch_index, files)| {
             println!("Process clue batch: {batch_index}");
 
-            let file_paths = files
-                .iter()
-                .filter(|f| f.is_ok())
-                .map(|f| f.as_ref().unwrap().path())
-                .collect_vec();
+            // let file_paths = files
+            //     .iter()
+            //     .filter(|f| f.is_ok())
+            //     .map(|f| f.as_ref().unwrap().path())
+            //     .collect_vec();
 
-            let clues = file_paths
-                .iter()
-                .map(|path| match std::fs::read(path) {
-                    Ok(clue) => match PvwCiphertext::from_bytes(&clue, &pvw_params) {
-                        Some(clue) => clue,
-                        None => {
-                            println!("Incorrect encoding of clue at: {path:?}");
-                            fake_clue.clone()
-                        }
-                    },
-                    Err(e) => {
-                        println!("Failed to read clue at: {path:?} due to error: {e:?}",);
-                        fake_clue.clone()
-                    }
-                })
-                .collect_vec();
+            // let clues = file_paths
+            //     .iter()
+            //     .map(|path| match std::fs::read(path) {
+            //         Ok(clue) => match PvwCiphertext::from_bytes(&clue, &pvw_params) {
+            //             Some(clue) => clue,
+            //             None => {
+            //                 println!("Incorrect encoding of clue at: {path:?}");
+            //                 fake_clue.clone()
+            //             }
+            //         },
+            //         Err(e) => {
+            //             println!("Failed to read clue at: {path:?} due to error: {e:?}",);
+            //             fake_clue.clone()
+            //         }
+            //     })
+            //     .collect_vec();
 
             println!("Decrypt_pvw of batch: {batch_index}");
             let decrypted_clues = decrypt_pvw(
@@ -123,8 +149,8 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 &pvw_params,
                 detection_key.pvw_sk_cts.to_vec(),
                 &detection_key.ek1,
-                &clues,
-                &fake_bfv_sk,
+                &files,
+                &bfv_sk,
             );
 
             println!("Range_fn of batch: {batch_index}");
@@ -137,7 +163,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                         &multiplicators,
                         1,
                         "params_850.bin",
-                        &fake_bfv_sk,
+                        &bfv_sk,
                     )
                 })
                 .collect_vec();
@@ -153,11 +179,18 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
             let select_pt =
                 Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
 
-            let mut p_path = output_dir.clone();
-            p_path.push("pertinencyCts");
-            std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
+            unsafe {
+                println!(
+                    "noise in pertinency_ct: {:?}",
+                    bfv_sk.measure_noise(&pertinency_ct)
+                )
+            }
 
-            file_paths.iter().enumerate().for_each(|(index, path)| {
+            // let mut p_path = output_dir.clone();
+            // p_path.push("pertinencyCts");
+            // std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
+
+            for index in 0..20 {
                 if index != 0 {
                     if index == bfv_params.degree() / 2 {
                         pertinency_ct = left_rot_key.rotates_rows(&pertinency_ct).unwrap();
@@ -165,26 +198,58 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                     pertinency_ct = left_rot_key.rotates_columns_by(&pertinency_ct, 1).unwrap()
                 }
                 let mut p_ct = &pertinency_ct * &select_pt;
+
+                unsafe {
+                    println!(
+                        "Noise in p_ct after mod switch: {:?}",
+                        bfv_sk.measure_noise(&p_ct)
+                    )
+                }
+
                 p_ct.mod_switch_to_next_level();
                 p_ct.mod_switch_to_next_level();
+
+                unsafe {
+                    println!(
+                        "Noise in p_ct after mod switch: {:?}",
+                        bfv_sk.measure_noise(&p_ct)
+                    )
+                }
+
                 let p_ct = inner_sum_key.computes_inner_sum(&p_ct).unwrap();
 
-                // save pertinency ciphertext
-                let name = path.file_name().unwrap().to_str().unwrap();
-                let mut file_path = p_path.clone();
-                file_path.push(format!("{name}"));
-
-                match std::fs::File::create(file_path.clone())
-                    .and_then(|mut f| f.write_all(p_ct.to_bytes().as_slice()))
-                {
-                    Ok(_) => {
-                        println!("Pertinency Ct write to {file_path:?} success");
-                    }
-                    Err(e) => {
-                        println!("Pertinency Ct write to {file_path:?} failed with error: {e}");
-                    }
+                unsafe {
+                    println!(
+                        "Noise in p_ct after inner sum: {:?}",
+                        bfv_sk.measure_noise(&p_ct)
+                    )
                 }
-            });
+
+                let product =
+                    Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&p_ct).unwrap(), Encoding::simd())
+                        .unwrap()
+                        .iter()
+                        .product::<u64>();
+                println!("p_ct at index {index} product: {product}");
+
+                // save pertinency ciphertext
+                // let name = path.file_name().unwrap().to_str().unwrap();
+                // let mut file_path = p_path.clone();
+                // file_path.push(format!("{name}"));
+
+                // match std::fs::File::create(file_path.clone())
+                //     .and_then(|mut f| f.write_all(p_ct.to_bytes().as_slice()))
+                // {
+                //     Ok(_) => {
+                //         println!("Pertinency Ct write to {file_path:?} success");
+                //     }
+                //     Err(e) => {
+                //         println!("Pertinency Ct write to {file_path:?} failed with error: {e}");
+                //     }
+                // }
+            }
+
+            // files.iter().enumerate().for_each(|(index, path)| {});
         });
 }
 
