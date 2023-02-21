@@ -758,7 +758,7 @@ mod tests {
     use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
-    use fhe_traits::{FheDecoder, FheDecrypter, FheEncrypter, Serialize};
+    use fhe_traits::{DeserializeParametrized, FheDecoder, FheDecrypter, FheEncrypter, Serialize};
     use fhe_util::variance;
     use itertools::izip;
     use rand::distributions::Uniform;
@@ -1661,6 +1661,8 @@ mod tests {
 
         let pertinent_indices = gen_pertinent_indices(40, 1 << 15);
 
+        std::fs::create_dir_all("generated/clues").unwrap();
+
         (0..(1usize << 15))
             .map(|index| {
                 if pertinent_indices.contains(&index) {
@@ -1699,5 +1701,45 @@ mod tests {
             });
         println!("Pertinent count: {:?}", pertinent_indices.len());
         println!("Pertinent file names: {:?}", pertinent_indices);
+    }
+
+    #[test]
+    fn check_pertinency_cts() {
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_moduli(MODULI_OMR)
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk: Vec<i64> =
+            bincode::deserialize(&std::fs::read("generated/bfvPrivKeyRs").unwrap()).unwrap();
+        let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
+
+        let mut pertinent_file_names = vec![];
+
+        std::fs::read_dir("generated/outputs/pertinencyCts")
+            .unwrap()
+            .collect_vec()
+            .iter()
+            .for_each(|path| {
+                let path = path.as_ref().unwrap().path();
+                let p_ct =
+                    Ciphertext::from_bytes(std::fs::read(&path).unwrap().as_slice(), &bfv_params)
+                        .unwrap();
+
+                if Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&p_ct).unwrap(), Encoding::simd())
+                    .unwrap()
+                    .iter()
+                    .product::<u64>()
+                    == 1
+                {
+                    pertinent_file_names.push(path.file_name().unwrap().to_os_string());
+                }
+            });
+
+        println!("Pertinent count: {:?}", pertinent_file_names.len());
+        println!("Pertinent file names: {:?}", pertinent_file_names);
     }
 }
