@@ -592,7 +592,7 @@ pub fn phase2(
 
             let mut rhs = vec![Ciphertext::zero(bfv_params); ct_span_count];
 
-            for i in 0..(set_size / batch_size) {
+            for i in 0..(1) {
                 // level 11
                 let unpacked_cts = pv_unpack(
                     bfv_params,
@@ -604,6 +604,16 @@ pub fn phase2(
                     sk,
                     level,
                 );
+
+                unpacked_cts.iter().enumerate().for_each(|(index, ct)| {
+                    let p = Vec::<u64>::try_decode(&sk.try_decrypt(ct).unwrap(), Encoding::simd())
+                        .unwrap();
+                    println!(
+                        "unpacked {}: {}",
+                        index + (i * batch_size),
+                        p.iter().product::<u64>()
+                    );
+                });
 
                 // level 13; unpacking consumes 2 levels
                 pv_compress(
@@ -650,9 +660,20 @@ pub fn phase2(
         });
     });
 
+    unsafe {
+        println!("pv noise{}", sk.measure_noise(&pv).unwrap());
+    }
+
     pv.mod_switch_to_last_level();
     for r in &mut rhs_total {
         r.mod_switch_to_last_level();
+    }
+
+    unsafe {
+        println!(
+            "pv after mod switch noise: {}",
+            sk.measure_noise(&pv).unwrap()
+        );
     }
 
     (pv, rhs_total)
@@ -797,9 +818,7 @@ mod tests {
         let bfv_params = Arc::new(
             BfvParametersBuilder::new()
                 .set_degree(DEGREE)
-                // .set_moduli(MODULI_OMR)
-                .set_moduli_sizes(OMR_S_SIZES)
-                // .set_moduli_sizes(&[52; 15])
+                .set_moduli(MODULI_OMR)
                 .set_plaintext_modulus(MODULI_OMR_PT[0])
                 // .set_variance(5)
                 .build()
@@ -810,10 +829,25 @@ mod tests {
         println!("Bfv Params{:?}", bfv_params);
         println!("Bfv moduli sizes{:?}", bfv_params.moduli_sizes());
 
-        let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
-        let dummy_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
-        let pvw_sk = Arc::new(PvwSecretKey::random(&pvw_params, &mut rng));
+        let bfv_sk = {
+            let bytes = std::fs::read("generated/keys/bfvPrivKeyRs").unwrap();
+            let key: Vec<i64> = bincode::deserialize(&bytes).unwrap();
+            SecretKey::new(key, &bfv_params)
+        };
+        let pvw_sk = {
+            let bytes = std::fs::read("generated/keys/cluePrivKey").unwrap();
+            PvwSecretKey::from_bytes(&bytes, &pvw_params)
+        };
         let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
+        let detection_key = {
+            let bytes = std::fs::read("generated/keys/detectionKey").unwrap();
+            deserialize_detection_key(&bfv_params, &bytes)
+        };
+
+        // let bfv_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
+        // let dummy_sk = Arc::new(SecretKey::random(&bfv_params, &mut rng));
+        // let pvw_sk = Arc::new(PvwSecretKey::random(&pvw_params, &mut rng));
+        // let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
 
         let set_size = SET_SIZE;
         let k = 50;
@@ -825,8 +859,8 @@ mod tests {
         dbg!(ct_span_count, payload_size);
 
         // gen clues
-        let mut pertinent_indices = gen_pertinent_indices(50, DEGREE);
-        // let mut pertinent_indices = vec![1, 2, 3];
+        // let mut pertinent_indices = gen_pertinent_indices(50, DEGREE);
+        let mut pertinent_indices = vec![1, 2, 3];
         pertinent_indices.sort();
         println!("Pertinent indices: {:?}", pertinent_indices);
 
@@ -837,8 +871,9 @@ mod tests {
         println!("Clues generated");
 
         let mut rng = thread_rng();
-        let d_ky = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-        let multiplicators = map_rlks_to_multiplicators(&d_ky.rlk_keys);
+
+        // let detection_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+        let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
 
         let (assigned_buckets, assigned_weights) =
             assign_buckets(m, gamma, MODULI_OMR_PT[0], set_size, &mut rng);
@@ -848,8 +883,8 @@ mod tests {
         let mut phase1_res = phase1(
             &bfv_params,
             &pvw_params,
-            &d_ky.pvw_sk_cts,
-            &d_ky.ek1,
+            &detection_key.pvw_sk_cts,
+            &detection_key.ek1,
             &multiplicators,
             &clues,
             &bfv_sk,
@@ -878,8 +913,8 @@ mod tests {
             &assigned_buckets,
             &assigned_weights,
             &bfv_params,
-            &d_ky.ek2,
-            &d_ky.ek3,
+            &detection_key.ek2,
+            &detection_key.ek3,
             &mut phase1_res,
             &payloads,
             32,
@@ -1610,5 +1645,59 @@ mod tests {
         let mut ct2 = multiplicator.multiply(&ct, &ct).unwrap();
         ct2.mod_switch_to_next_level();
         unsafe { dbg!(sk.measure_noise(&ct2)) };
+    }
+
+    // CLI related functions
+    #[test]
+    fn gen_and_save_clues() {
+        let mut rng = thread_rng();
+        let pvw_params = Arc::new(PvwParameters::default());
+        let bytes = std::fs::read("generated/keys/cluePrivKey").unwrap();
+        let pvw_sk = PvwSecretKey::from_bytes(&bytes, &pvw_params);
+        let pvw_pk = pvw_sk.public_key(&mut rng);
+
+        let fake_pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+        let fake_pvw_pk = fake_pvw_sk.public_key(&mut rng);
+
+        let pertinent_indices = gen_pertinent_indices(40, 1 << 15);
+
+        (0..(1usize << 15))
+            .map(|index| {
+                if pertinent_indices.contains(&index) {
+                    pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
+                } else {
+                    fake_pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
+                }
+            })
+            .enumerate()
+            .for_each(|(index, ct)| {
+                let mut file = std::fs::File::create(format!("./generated/clues/{index}")).unwrap();
+                file.write_all(&ct.to_bytes()).unwrap();
+            });
+    }
+
+    /// Reads clues from generated/clues/* and find the pertaining ones.
+    #[test]
+    fn find_pertaining_pvw_clues() {
+        let pvw_params = Arc::new(PvwParameters::default());
+        let pvw_sk = PvwSecretKey::from_bytes(
+            &std::fs::read("generated/keys/cluePrivKey").unwrap(),
+            &pvw_params,
+        );
+        let mut pertinent_indices = vec![];
+        std::fs::read_dir("generated/clues")
+            .unwrap()
+            .collect_vec()
+            .iter()
+            .for_each(|path| {
+                let path = path.as_ref().unwrap().path();
+                let clue =
+                    PvwCiphertext::from_bytes(&std::fs::read(&path).unwrap(), &pvw_params).unwrap();
+                if pvw_sk.decrypt_shifted(clue) == vec![0, 0, 0, 0] {
+                    pertinent_indices.push(path.file_name().unwrap().to_os_string());
+                }
+            });
+        println!("Pertinent count: {:?}", pertinent_indices.len());
+        println!("Pertinent file names: {:?}", pertinent_indices);
     }
 }

@@ -89,7 +89,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
     std::fs::read_dir(clues)
         .unwrap()
         .collect_vec()
-        .par_chunks(10)
+        .par_chunks(1 << 15)
         .enumerate()
         .for_each(|(batch_index, files)| {
             println!("Process clue batch: {batch_index}");
@@ -154,7 +154,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
 
             let mut p_path = output_dir.clone();
-            p_path.push("pertinency_cts");
+            p_path.push("pertinencyCts");
             std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
 
             file_paths.iter().enumerate().for_each(|(index, path)| {
@@ -170,19 +170,12 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                 let p_ct = inner_sum_key.computes_inner_sum(&p_ct).unwrap();
 
                 // save pertinency ciphertext
-                let name = path
-                    .file_prefix()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .chars()
-                    .next()
-                    .unwrap();
+                let name = path.file_name().unwrap().to_str().unwrap();
                 let mut file_path = p_path.clone();
                 file_path.push(format!("{name}"));
 
                 match std::fs::File::create(file_path.clone())
-                    .and_then(|mut f| f.write_all(&p_ct.to_bytes()))
+                    .and_then(|mut f| f.write_all(p_ct.to_bytes().as_slice()))
                 {
                     Ok(_) => {
                         println!("Pertinency Ct write to {file_path:?} success");
