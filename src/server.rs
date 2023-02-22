@@ -190,7 +190,6 @@ pub fn range_fn(
     input: &Ciphertext,
     multiplicators: &HashMap<usize, Multiplicator>,
     level_offset: usize,
-    params_path: &str,
     sk: &SecretKey,
 ) -> Ciphertext {
     let mut now = std::time::SystemTime::now();
@@ -530,7 +529,7 @@ pub fn phase1(
             now = std::time::Instant::now();
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
-                .map(|d| range_fn(bfv_params, d, multiplicators, 1, "params_850.bin", sk))
+                .map(|d| range_fn(bfv_params, d, multiplicators, 1, sk))
                 .collect_vec();
             println!("range time {:?}", now.elapsed());
 
@@ -1136,14 +1135,7 @@ mod tests {
         let ct: Ciphertext = bfv_sk.try_encrypt(&pt, &mut rng).unwrap();
 
         let mut now = std::time::SystemTime::now();
-        let res_ct = range_fn(
-            &bfv_params,
-            &ct,
-            &multiplicators,
-            1,
-            "params_850.bin",
-            &bfv_sk,
-        );
+        let res_ct = range_fn(&bfv_params, &ct, &multiplicators, 1, &bfv_sk);
         let res_pt = bfv_sk.try_decrypt(&res_ct).unwrap();
         println!(" Range fn ct {:?}", now.elapsed().unwrap());
 
@@ -1659,7 +1651,8 @@ mod tests {
         let fake_pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
         let fake_pvw_pk = fake_pvw_sk.public_key(&mut rng);
 
-        let pertinent_indices = gen_pertinent_indices(40, 1 << 15);
+        // let pertinent_indices = gen_pertinent_indices(40, 1 << 15);
+        let pertinent_indices = vec![1, 2, 3];
 
         std::fs::create_dir_all("generated/clues").unwrap();
 
@@ -1714,7 +1707,7 @@ mod tests {
                 .unwrap(),
         );
         let bfv_sk: Vec<i64> =
-            bincode::deserialize(&std::fs::read("generated/bfvPrivKeyRs").unwrap()).unwrap();
+            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
         let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
 
         let mut pertinent_file_names = vec![];
@@ -1728,6 +1721,10 @@ mod tests {
                 let p_ct =
                     Ciphertext::from_bytes(std::fs::read(&path).unwrap().as_slice(), &bfv_params)
                         .unwrap();
+
+                unsafe {
+                    dbg!(bfv_sk.measure_noise(&p_ct).unwrap());
+                }
 
                 if Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&p_ct).unwrap(), Encoding::simd())
                     .unwrap()

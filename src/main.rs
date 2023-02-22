@@ -86,6 +86,10 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 
     let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
 
+    let mut p_path = output_dir.clone();
+    p_path.push("pertinencyCts");
+    std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
+
     std::fs::read_dir(clues)
         .unwrap()
         .collect_vec()
@@ -130,16 +134,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
             println!("Range_fn of batch: {batch_index}");
             let mut ranged_decrypted_clues = decrypted_clues
                 .iter()
-                .map(|ct| {
-                    range_fn(
-                        &bfv_params,
-                        ct,
-                        &multiplicators,
-                        1,
-                        "params_850.bin",
-                        &fake_bfv_sk,
-                    )
-                })
+                .map(|ct| range_fn(&bfv_params, ct, &multiplicators, 1, &fake_bfv_sk))
                 .collect_vec();
 
             println!("Mul_many of batch: {batch_index}");
@@ -153,11 +148,8 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
             let select_pt =
                 Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
 
-            let mut p_path = output_dir.clone();
-            p_path.push("pertinencyCts");
-            std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
-
             file_paths.iter().enumerate().for_each(|(index, path)| {
+                // println!("Processing inner sum for {index}");
                 if index != 0 {
                     if index == bfv_params.degree() / 2 {
                         pertinency_ct = left_rot_key.rotates_rows(&pertinency_ct).unwrap();
