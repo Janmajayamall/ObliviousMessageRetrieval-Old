@@ -22,11 +22,11 @@ use crate::{
     server::{DetectionKey, MessageDigest},
 };
 
-pub fn read_range_coeffs(path: &str) -> Vec<u64> {
-    let mut file = File::open(path).unwrap();
-    let mut buf = vec![0u64; 65536];
-    file.read_u64_into::<LittleEndian>(&mut buf).unwrap();
-    buf
+pub fn read_range_coeffs() -> Vec<u64> {
+    let bytes = include_bytes!("../params_850.bin");
+    let mut coeffs = [0u64; 65536];
+    LittleEndian::read_u64_into(bytes, &mut coeffs);
+    coeffs.to_vec()
 }
 
 pub fn mul_many_poly(values: &mut Vec<Poly>) {
@@ -264,7 +264,7 @@ pub fn range_fn_poly(
     params_path: &str,
 ) -> Poly {
     // read coeffs
-    let coeffs = read_range_coeffs(params_path);
+    let coeffs = read_range_coeffs();
     let k_degree = 256;
     let mut k_powers_of_x: Vec<Poly> = powers_of_x_poly(&ctx, &input, k_degree);
     // M = x^256

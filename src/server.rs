@@ -4,6 +4,7 @@ use crate::utils::{
     serialize_message_digest,
 };
 use crate::{CT_SPAN_COUNT, DEGREE, GAMMA, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE};
+use byteorder::{ByteOrder, LittleEndian};
 use fhe::bfv::{
     self, BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Multiplicator,
     Plaintext, RelinearizationKey, SecretKey,
@@ -15,7 +16,6 @@ use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::ops::Mul;
 use std::sync::Arc;
 use std::vec;
 
@@ -215,7 +215,7 @@ pub fn range_fn(
         }
     }
 
-    let coeffs = read_range_coeffs(params_path);
+    let coeffs = read_range_coeffs();
 
     let mut total = Ciphertext::zero(bfv_params);
     for i in 0..256 {

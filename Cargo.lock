@@ -676,6 +676,7 @@ dependencies = [
  "itertools",
  "ndarray",
  "protobuf",
+ "quote",
  "rand",
  "rand_chacha",
  "rayon",

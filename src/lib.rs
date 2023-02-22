@@ -2,6 +2,7 @@ pub mod client;
 pub mod pvw;
 pub mod server;
 pub mod utils;
+use byteorder::LittleEndian;
 pub use fhe;
 pub use fhe_traits;
 

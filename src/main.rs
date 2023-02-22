@@ -1,5 +1,5 @@
 #![feature(path_file_prefix)]
-use byteorder::WriteBytesExt;
+use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use clap::{Parser, Subcommand};
 use fhe::bfv::{Ciphertext, Plaintext};
 use fhe_math::zq::Modulus;
