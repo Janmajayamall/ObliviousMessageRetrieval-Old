@@ -44,7 +44,20 @@ enum Command {
         #[arg(short, long)]
         output_dir: PathBuf,
     },
-    CreateDigest {
+    CreateDigest1 {
+        #[arg(short, long)]
+        pertinency_cts: std::path::PathBuf,
+
+        #[arg(short, long)]
+        output_dir: PathBuf,
+
+        #[arg(short, long)]
+        from_tx: usize,
+
+        #[arg(short, long)]
+        last_tx: usize,
+    },
+    CreateDigest2 {
         #[arg(short, long)]
         messages: std::path::PathBuf,
 
@@ -59,6 +72,9 @@ enum Command {
 
         #[arg(short, long)]
         last_tx: usize,
+
+        #[arg(short, long)]
+        k: usize,
     },
 }
 
@@ -180,12 +196,13 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
         });
 }
 
-fn create_digest(
+fn create_digest2(
     messages: PathBuf,
     pertinency_cts: PathBuf,
     output_dir: PathBuf,
     from_tx: usize,
     last_tx: usize,
+    k: usize,
 ) {
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -297,12 +314,39 @@ fn main() {
             clues,
             output_dir,
         } => start_omr(detection_key, clues, output_dir),
-        Command::CreateDigest {
+        Command::CreateDigest1 {
+            pertinency_cts,
+            output_dir,
+            from_tx,
+            last_tx,
+        } => {
+            println!("{from_tx}-{last_tx}");
+            // let bfv_params = Arc::new(
+            //     BfvParametersBuilder::new()
+            //         .set_degree(DEGREE)
+            //         .set_plaintext_modulus(MODULI_OMR_PT[0])
+            //         .set_moduli_sizes(OMR_S_SIZES)
+            //         .build()
+            //         .unwrap(),
+            // );
+            // let mut rng = thread_rng();
+            // let mut select = vec![0u64; bfv_params.degree()];
+            // select[0] = 1;
+            // let select_pt: Plaintext =
+            //     Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
+
+            // let sk = SecretKey::random(&bfv_params, &mut rng);
+        }
+        Command::CreateDigest2 {
             messages,
             pertinency_cts,
             output_dir,
             from_tx,
             last_tx,
-        } => create_digest(messages, pertinency_cts, output_dir, from_tx, last_tx),
+            k,
+        } => {
+            println!("{from_tx}-{last_tx}");
+            // create_digest2(messages, pertinency_cts, output_dir, from_tx, last_tx, k);
+        }
     }
 }
