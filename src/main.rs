@@ -62,13 +62,13 @@ enum Command {
     },
 }
 
-fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
+fn start_omr() {
     let mut rng = thread_rng();
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
             .set_degree(DEGREE)
             .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli_sizes(OMR_S_SIZES)
+            .set_moduli(MODULI_OMR)
             .build()
             .unwrap(),
     );
@@ -89,7 +89,8 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 
     //TODO: remove me
     let (clues, detection_key, bfv_sk) = {
-        let pertinent_indices = vec![1, 2, 3];
+        let pertinent_indices = vec![1, 2, 3, 4, 5, 6];
+
         let pvw_sk = PvwSecretKey::from_bytes(
             &std::fs::read("generated/keys/cluePrivKey").unwrap(),
             &pvw_params,
@@ -190,7 +191,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
             // p_path.push("pertinencyCts");
             // std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
 
-            for index in 0..20 {
+            for index in 0..100 {
                 if index != 0 {
                     if index == bfv_params.degree() / 2 {
                         pertinency_ct = left_rot_key.rotates_rows(&pertinency_ct).unwrap();
@@ -201,7 +202,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 
                 unsafe {
                     println!(
-                        "Noise in p_ct after mod switch: {:?}",
+                        "Noise in p_ct before mod switch: {:?}",
                         bfv_sk.measure_noise(&p_ct)
                     )
                 }
@@ -365,19 +366,20 @@ fn create_digest(
 }
 
 fn main() {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::StartOMR {
-            detection_key,
-            clues,
-            output_dir,
-        } => start_omr(detection_key, clues, output_dir),
-        Command::CreateDigest {
-            messages,
-            pertinency_cts,
-            output_dir,
-            from_tx,
-            num_messages,
-        } => create_digest(messages, pertinency_cts, output_dir, from_tx, num_messages),
-    }
+    start_omr();
+    // let cli = Cli::parse();
+    // match cli.command {
+    //     Command::StartOMR {
+    //         detection_key,
+    //         clues,
+    //         output_dir,
+    //     } => start_omr(detection_key, clues, output_dir),
+    //     Command::CreateDigest {
+    //         messages,
+    //         pertinency_cts,
+    //         output_dir,
+    //         from_tx,
+    //         num_messages,
+    //     } => create_digest(messages, pertinency_cts, output_dir, from_tx, num_messages),
+    // }
 }
