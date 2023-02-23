@@ -86,7 +86,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
         BfvParametersBuilder::new()
             .set_degree(DEGREE)
             .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli_sizes(OMR_S_SIZES)
+            .set_moduli(MODULI_OMR)
             .build()
             .unwrap(),
     );
@@ -104,9 +104,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 
     let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
 
-    let mut p_path = output_dir.clone();
-    p_path.push("pertinencyCts");
-    std::fs::create_dir_all(&p_path).expect("Failed to setup output directory");
+    std::fs::create_dir_all(&output_dir).expect("Failed to setup output directory");
 
     std::fs::read_dir(clues)
         .unwrap()
@@ -181,7 +179,7 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 
                 // save pertinency ciphertext
                 let name = path.file_name().unwrap().to_str().unwrap();
-                let mut file_path = p_path.clone();
+                let mut file_path = output_dir.clone();
                 file_path.push(format!("{name}"));
 
                 match std::fs::File::create(file_path.clone())
@@ -432,7 +430,7 @@ fn dir_trial() {
 
                     let start_row = bucket_row_span * bucket;
                     for j in start_row..start_row + bucket_row_span {
-                        m_pt[j] = q_mod.mul(&tx[j], weight);
+                        // m_pt[j] = q_mod.mul(&tx[j], weight);
                     }
                 }
                 let m_pt =
@@ -487,7 +485,7 @@ fn main() {
             last_tx,
             k,
         } => {
-            println!("{from_tx}-{last_tx}");
+            println!("{first_tx}-{last_tx}");
             // create_digest2(messages, pertinency_cts, output_dir, from_tx, last_tx, k);
         }
     }

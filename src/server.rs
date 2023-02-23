@@ -1162,7 +1162,7 @@ mod tests {
 
         let mut rng = thread_rng();
 
-        let ctx = Arc::new(Context::new(&[t], degree, &mut HashMap::default()).unwrap());
+        let ctx = Arc::new(Context::new(&[t], degree, &mut HashMap::default(), true).unwrap());
         let mut X = Uniform::new(0u64, t)
             .sample_iter(rng.clone())
             .take(degree)
@@ -1206,7 +1206,7 @@ mod tests {
         // println!(" Final power of X {:?}", now.elapsed().unwrap());
 
         // plaintext evaluation of X
-        let t_ctx = Arc::new(Context::new(&[t], degree, &mut HashMap::default()).unwrap());
+        let t_ctx = Arc::new(Context::new(&[t], degree, &mut HashMap::default(), true).unwrap());
         let pt_poly = Poly::try_convert_from(&X, &t_ctx, false, Representation::Ntt).unwrap();
         let powers = powers_of_x_poly(&t_ctx, &pt_poly, k_degree);
 
@@ -1650,9 +1650,10 @@ mod tests {
 
         let fake_pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
         let fake_pvw_pk = fake_pvw_sk.public_key(&mut rng);
+        let fake_clue = fake_pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
 
-        // let pertinent_indices = gen_pertinent_indices(40, 1 << 15);
-        let pertinent_indices = vec![1, 2, 3];
+        let pertinent_indices = gen_pertinent_indices(40, 1 << 15);
+        // let pertinent_indices = vec![1, 2, 3];
 
         std::fs::create_dir_all("generated/clues").unwrap();
 
@@ -1661,7 +1662,7 @@ mod tests {
                 if pertinent_indices.contains(&index) {
                     pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
                 } else {
-                    fake_pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng)
+                    fake_clue.clone()
                 }
             })
             .enumerate()
@@ -1712,7 +1713,7 @@ mod tests {
 
         let mut pertinent_file_names = vec![];
 
-        std::fs::read_dir("generated/outputs/pertinencyCts")
+        std::fs::read_dir("generated/o1")
             .unwrap()
             .collect_vec()
             .iter()
@@ -1722,9 +1723,9 @@ mod tests {
                     Ciphertext::from_bytes(std::fs::read(&path).unwrap().as_slice(), &bfv_params)
                         .unwrap();
 
-                unsafe {
-                    dbg!(bfv_sk.measure_noise(&p_ct).unwrap());
-                }
+                // unsafe {
+                //     dbg!(bfv_sk.measure_noise(&p_ct).unwrap());
+                // }
 
                 if Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&p_ct).unwrap(), Encoding::simd())
                     .unwrap()
@@ -1732,6 +1733,10 @@ mod tests {
                     .product::<u64>()
                     == 1
                 {
+                    println!(
+                        "pertinent index: {:?}",
+                        path.file_name().unwrap().to_os_string()
+                    );
                     pertinent_file_names.push(path.file_name().unwrap().to_os_string());
                 }
             });
