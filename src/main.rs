@@ -20,7 +20,7 @@ use rayon::{
     slice::ParallelSlice,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::format,
     io::Write,
     path::{Path, PathBuf},
@@ -78,6 +78,31 @@ enum Command {
         #[arg(short, long)]
         k: usize,
     },
+}
+
+/// returns (file_name, tx_hash) array sorted by corresponding tx_index
+fn get_mapping(first_tx: usize, last_tx: usize) -> Vec<(String, String)> {
+    let messages = PathBuf::from_str("").unwrap();
+
+    let mut tx_map = HashMap::new();
+    for entry in walkdir::WalkDir::new(messages).max_depth(1) {
+        let file_name = entry.unwrap();
+        let file_name = file_name.file_name().to_str().unwrap().to_string();
+        let splits = file_name.split('_').map(|v| v.to_string()).collect_vec();
+        tx_map.insert(
+            splits[0].parse::<usize>().unwrap(),
+            (file_name, splits[1].clone()),
+        );
+    }
+
+    let mut mapping = vec![];
+    for index in first_tx..last_tx {
+        if let Some(val) = tx_map.get(&index) {
+            mapping.push(val.clone());
+        }
+    }
+
+    mapping
 }
 
 fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
@@ -213,8 +238,8 @@ fn create_digest2(
             .unwrap(),
     );
 
-    // let mut tx_hashes: Vec<String> = vec![];
-    let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
+    let mut tx_hashes = get_mapping(first_tx, last_tx);
+    // let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
 
     let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
     thread_rng().fill(&mut seed);
@@ -230,51 +255,55 @@ fn create_digest2(
 
     let mut msg_ct = Ciphertext::zero(&bfv_params);
 
-    let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
-    let messages = PathBuf::from_str("generated/messages").unwrap();
-    tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
-        let mut p_ct_path = pertinency_cts_path.clone();
-        p_ct_path.push(format!("{tx_hash}"));
-        if let Ok(p_ct) = std::fs::read(p_ct_path) {
-            if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
-                let tx = {
-                    let mut m_path = messages.clone();
-                    m_path.push(format!("{tx_hash}"));
-                    let mut tx = std::fs::read(m_path)
-                        .unwrap()
-                        .chunks(2)
-                        .map(|two_bytes| (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 8))
-                        .collect_vec();
+    // let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
+    // let messages = PathBuf::from_str("generated/messages").unwrap();
+    tx_hashes
+        .iter()
+        .enumerate()
+        .for_each(|(index, (tx_file_name, tx_hash))| {
+            let mut p_ct_path = pertinency_cts.clone();
+            p_ct_path.push(format!("{tx_hash}"));
+            if let Ok(p_ct) = std::fs::read(p_ct_path) {
+                if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
+                    let tx = {
+                        let mut m_path = messages.clone();
+                        m_path.push(format!("{tx_file_name}"));
+                        let mut tx = std::fs::read(m_path)
+                            .unwrap()
+                            .chunks(2)
+                            .map(|two_bytes| (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 8))
+                            .collect_vec();
 
-                    // fill in empty bytes till len isn't equal to 512/2
-                    while tx.len() != 256 {
-                        tx.push(0);
+                        // fill in empty bytes till len isn't equal to 512/2
+                        while tx.len() != 256 {
+                            tx.push(0);
+                        }
+                        tx
+                    };
+
+                    // add message
+                    let mut m_pt = vec![0u64; bfv_params.degree()];
+                    for i in 0..gamma {
+                        let bucket = assigned_buckets[index][i];
+                        let weight = assigned_weights[index][i];
+
+                        let start_row = bucket_row_span * bucket;
+                        for j in start_row..start_row + bucket_row_span {
+                            m_pt[j] = q_mod.mul(tx[j - start_row], weight);
+                        }
                     }
-                    tx
-                };
-
-                // add message
-                let mut m_pt = vec![0u64; bfv_params.degree()];
-                for i in 0..gamma {
-                    let bucket = assigned_buckets[index][i];
-                    let weight = assigned_weights[index][i];
-
-                    let start_row = bucket_row_span * bucket;
-                    for j in start_row..start_row + bucket_row_span {
-                        m_pt[j] = q_mod.mul(tx[j - start_row], weight);
-                    }
+                    let m_pt =
+                        Plaintext::try_encode(&m_pt, Encoding::simd_at_level(13), &bfv_params)
+                            .unwrap();
+                    p_ct *= &m_pt;
+                    msg_ct += &p_ct;
+                } else {
+                    println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
                 }
-                let m_pt =
-                    Plaintext::try_encode(&m_pt, Encoding::simd_at_level(13), &bfv_params).unwrap();
-                p_ct *= &m_pt;
-                msg_ct += &p_ct;
             } else {
-                println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
-        } else {
-            println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
-        }
-    });
+        });
 
     msg_ct.mod_switch_to_last_level();
 
@@ -290,14 +319,9 @@ fn create_digest2(
         .expect("Writing digest buffer to digest file should succeed");
 }
 
-/// returns tx_hash array sorted by corresponding tx_index
-fn determine_mapping() -> Vec<u8> {
-    todo!()
-}
-
 fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize, last_tx: usize) {
-    // let tx_hashes = determine_mapping();
-    let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
+    let tx_hashes = get_mapping(first_tx, last_tx);
+    // let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
 
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -310,28 +334,31 @@ fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize,
 
     let mut pv_ct = Ciphertext::zero(&bfv_params);
 
-    let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
+    // let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
 
     // read p_ct and build pv_ct
-    tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
-        let mut p_ct_path = pertinency_cts_path.clone();
-        p_ct_path.push(format!("{tx_hash}"));
-        if let Ok(p_ct) = std::fs::read(p_ct_path) {
-            if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
-                // add pertinency bit
-                let mut pt = vec![0u64; bfv_params.degree()];
-                pt[index / 16] = 1u64 << (index % 16);
-                let pt =
-                    Plaintext::try_encode(&pt, Encoding::simd_at_level(13), &bfv_params).unwrap();
-                p_ct *= &pt;
-                pv_ct += &p_ct;
+    tx_hashes
+        .iter()
+        .enumerate()
+        .for_each(|(index, (_, tx_hash))| {
+            let mut p_ct_path = pertinency_cts.clone();
+            p_ct_path.push(format!("{tx_hash}"));
+            if let Ok(p_ct) = std::fs::read(p_ct_path) {
+                if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
+                    // add pertinency bit
+                    let mut pt = vec![0u64; bfv_params.degree()];
+                    pt[index / 16] = 1u64 << (index % 16);
+                    let pt = Plaintext::try_encode(&pt, Encoding::simd_at_level(13), &bfv_params)
+                        .unwrap();
+                    p_ct *= &pt;
+                    pv_ct += &p_ct;
+                } else {
+                    println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                }
             } else {
-                println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
-        } else {
-            println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
-        }
-    });
+        });
 
     pv_ct.mod_switch_to_last_level();
 
@@ -359,96 +386,6 @@ fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize,
         .expect("File creation for storing digest one should succeed");
     file.write_all(&pv_ct_byes)
         .expect("Writing digest buffer to digest file should succeed");
-}
-
-fn dir_trial() {
-    let bfv_params = Arc::new(
-        BfvParametersBuilder::new()
-            .set_degree(DEGREE)
-            .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli_sizes(OMR_S_SIZES)
-            .build()
-            .unwrap(),
-    );
-
-    let index_set: HashSet<String> = HashSet::from_iter((0..4645usize).map(|v| v.to_string()));
-
-    let mut tx_hashes = vec![];
-    let mut tx_data = vec![];
-    for entry in walkdir::WalkDir::new("generated/outputs/pertinencyCts/").max_depth(1) {
-        let file_name = entry.unwrap();
-        let splits = file_name
-            .file_name()
-            .to_str()
-            .unwrap()
-            .to_string()
-            .split('_')
-            .map(|v| v.to_string())
-            .collect_vec();
-
-        if splits.len() == 1 && index_set.contains(&splits[0]) {
-            tx_hashes.push(splits[0].clone());
-            let tx = std::fs::read(file_name.path()).unwrap_or_else(|_| {
-                panic!("Failed to read transaction at: {:?}", file_name.path())
-            });
-            tx_data.push(tx);
-        }
-    }
-
-    let mut pv_ct = Ciphertext::zero(&bfv_params);
-    let mut msg_ct = Ciphertext::zero(&bfv_params);
-
-    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
-    thread_rng().fill(&mut seed);
-    let mut rng = ChaChaRng::from_seed(seed);
-
-    let k = 50;
-    let m = k * 2;
-    let gamma = 5;
-    let message_size = 512;
-    let bucket_row_span = 256;
-    let (assigned_buckets, assigned_weights) =
-        assign_buckets(m, gamma, MODULI_OMR_PT[0], tx_hashes.len(), &mut rng);
-    let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
-
-    let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
-    // read p_ct and the payloads
-    tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
-        let mut p_ct_path = pertinency_cts_path.clone();
-        p_ct_path.push(tx_hash);
-        if let Ok(p_ct) = std::fs::read(p_ct_path) {
-            if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
-                let tx = tx_data[index].clone();
-
-                // add pertinency bit
-                let mut pt = vec![0u64; bfv_params.degree()];
-                pt[index / 16] = 1u64 << (index % 16);
-                let pt =
-                    Plaintext::try_encode(&pt, Encoding::simd_at_level(13), &bfv_params).unwrap();
-                pv_ct += &(&p_ct * &pt);
-
-                // add message
-                let mut m_pt = vec![0u64; bfv_params.degree()];
-                for i in 0..gamma {
-                    let bucket = assigned_buckets[index][i];
-                    let weight = assigned_weights[index][i];
-
-                    let start_row = bucket_row_span * bucket;
-                    for j in start_row..start_row + bucket_row_span {
-                        // m_pt[j] = q_mod.mul(&tx[j], weight);
-                    }
-                }
-                let m_pt =
-                    Plaintext::try_encode(&m_pt, Encoding::simd_at_level(13), &bfv_params).unwrap();
-                p_ct *= &m_pt;
-                msg_ct += &p_ct;
-            } else {
-                println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
-            }
-        } else {
-            println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
-        }
-    });
 }
 
 fn main() {
