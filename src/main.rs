@@ -200,7 +200,7 @@ fn create_digest2(
     messages: PathBuf,
     pertinency_cts: PathBuf,
     output_dir: PathBuf,
-    from_tx: usize,
+    first_tx: usize,
     last_tx: usize,
     k: usize,
 ) {
@@ -213,97 +213,81 @@ fn create_digest2(
             .unwrap(),
     );
 
-    let mut pv_ct = Ciphertext::zero(&bfv_params);
-    let mut msg_ct = Ciphertext::zero(&bfv_params);
+    // let mut tx_hashes: Vec<String> = vec![];
+    let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
 
     let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
     thread_rng().fill(&mut seed);
     let mut rng = ChaChaRng::from_seed(seed);
 
-    let k = 50;
-    let m = k * 2;
-    let gamma = 5;
+    let max_txs = 64;
+    let (k, m, gamma) = gen_srlc_params(max_txs);
     let message_size = 512;
     let bucket_row_span = 256;
     let (assigned_buckets, assigned_weights) =
-        assign_buckets(m, gamma, MODULI_OMR_PT[0], last_tx - from_tx, &mut rng);
+        assign_buckets(m, gamma, MODULI_OMR_PT[0], tx_hashes.len(), &mut rng);
     let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
 
-    (from_tx..from_tx + last_tx).into_iter().for_each(|index| {
-        let mut path = pertinency_cts.clone();
-        path.push(format!("{index}"));
-        match std::fs::read(path) {
-            Ok(p_bytes) => match Ciphertext::from_bytes(&p_bytes, &bfv_params) {
-                Ok(mut pertinency_ct) => {
-                    // read message
-                    let mut msg_path = messages.clone();
-                    msg_path.push(format!("{index}"));
-                    match std::fs::read(msg_path) {
-                        Ok(mut message_bytes) => {
-                            // pad message bytes
-                            while message_bytes.len() < message_size {
-                                message_bytes.push(0u8);
-                            }
+    let mut msg_ct = Ciphertext::zero(&bfv_params);
 
-                            // change to base 16
-                            let message_bytes = message_bytes
-                                .chunks(2)
-                                .map(|two_bytes| {
-                                    (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 16)
-                                })
-                                .collect_vec();
+    let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
+    let messages = PathBuf::from_str("generated/messages").unwrap();
+    tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
+        let mut p_ct_path = pertinency_cts_path.clone();
+        p_ct_path.push(format!("{tx_hash}"));
+        if let Ok(p_ct) = std::fs::read(p_ct_path) {
+            if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
+                let tx = {
+                    let mut m_path = messages.clone();
+                    m_path.push(format!("{tx_hash}"));
+                    let mut tx = std::fs::read(m_path)
+                        .unwrap()
+                        .chunks(2)
+                        .map(|two_bytes| (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 8))
+                        .collect_vec();
 
-                            // change bit in pv_ct
-                            let mut pt = vec![0u64; bfv_params.degree()];
-                            pt[(index - from_tx) / 16] = 1u64 << ((index - from_tx) % 16);
-                            let pt = Plaintext::try_encode(
-                                &pt,
-                                Encoding::simd_at_level(13),
-                                &bfv_params,
-                            )
-                            .unwrap();
+                    // fill in empty bytes till len isn't equal to 512/2
+                    while tx.len() != 256 {
+                        tx.push(0);
+                    }
+                    tx
+                };
 
-                            // add to pv
-                            pv_ct += &(&pertinency_ct * &pt);
+                // add message
+                let mut m_pt = vec![0u64; bfv_params.degree()];
+                for i in 0..gamma {
+                    let bucket = assigned_buckets[index][i];
+                    let weight = assigned_weights[index][i];
 
-                            // add to msg_ct
-                            let mut m_pt = vec![0u64; bfv_params.degree()];
-                            (0..gamma).into_iter().for_each(|i| {
-                                let bucket = assigned_buckets[index - from_tx][i];
-                                let weight = assigned_weights[index - from_tx][i];
-                                let row_offset = bucket * bucket_row_span;
-                                (0..bucket_row_span).into_iter().for_each(|j| {
-                                    m_pt[row_offset + j] = q_mod.mul(weight, message_bytes[j]);
-                                });
-                            });
-                            let m_pt = Plaintext::try_encode(
-                                &m_pt,
-                                Encoding::simd_at_level(13),
-                                &bfv_params,
-                            )
-                            .unwrap();
-                            pertinency_ct *= &m_pt;
-                            msg_ct += &pertinency_ct;
-                        }
-                        Err(e) => {}
+                    let start_row = bucket_row_span * bucket;
+                    for j in start_row..start_row + bucket_row_span {
+                        m_pt[j] = q_mod.mul(tx[j - start_row], weight);
                     }
                 }
-                Err(e) => {}
-            },
-            Err(e) => {}
+                let m_pt =
+                    Plaintext::try_encode(&m_pt, Encoding::simd_at_level(13), &bfv_params).unwrap();
+                p_ct *= &m_pt;
+                msg_ct += &p_ct;
+            } else {
+                println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+            }
+        } else {
+            println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
         }
     });
 
-    pv_ct.mod_switch_to_last_level();
     msg_ct.mod_switch_to_last_level();
 
-    let digest = MessageDigest {
-        pv: pv_ct,
-        msgs: vec![msg_ct],
+    let digest = Digest2 {
         seed,
+        cts: vec![msg_ct],
     };
 
-    //TODO: serialize and store message digest.
+    std::fs::create_dir_all(output_dir).expect("Output directory should exist");
+    let mut file = std::fs::File::create(format!("digest2-{first_tx}-{last_tx}"))
+        .expect("File creation for storing digest one should succeed");
+    file.write_all(&serialize_digest2(&digest))
+        .expect("Writing digest buffer to digest file should succeed");
 }
 
 /// returns tx_hash array sorted by corresponding tx_index
@@ -312,7 +296,8 @@ fn determine_mapping() -> Vec<u8> {
 }
 
 fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize, last_tx: usize) {
-    let tx_hashes = determine_mapping();
+    // let tx_hashes = determine_mapping();
+    let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
 
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -325,11 +310,12 @@ fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize,
 
     let mut pv_ct = Ciphertext::zero(&bfv_params);
 
-    let pertinency_cts_path = PathBuf::from_str("generated/outputs/pertinencyCts").unwrap();
+    let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
 
     // read p_ct and build pv_ct
     tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
         let mut p_ct_path = pertinency_cts_path.clone();
+        p_ct_path.push(format!("{tx_hash}"));
         if let Ok(p_ct) = std::fs::read(p_ct_path) {
             if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
                 // add pertinency bit
@@ -347,7 +333,26 @@ fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize,
         }
     });
 
+    pv_ct.mod_switch_to_last_level();
+
     let pv_ct_byes = pv_ct.to_bytes();
+
+    {
+        let key: Vec<i64> =
+            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
+        let sk = SecretKey::new(key, &bfv_params);
+        let values = pv_decompress(
+            &Vec::<u64>::try_decode(&sk.try_decrypt(&pv_ct).unwrap(), Encoding::simd()).unwrap(),
+            16,
+        );
+        let mut detected_indices = vec![];
+        values.iter().enumerate().for_each(|(index, v)| {
+            if *v == 1 {
+                detected_indices.push(index);
+            }
+        });
+        dbg!(detected_indices);
+    }
 
     std::fs::create_dir_all(output_dir).expect("Output directory should exist");
     let mut file = std::fs::File::create(format!("digest1-{first_tx}-{last_tx}"))
@@ -406,7 +411,7 @@ fn dir_trial() {
         assign_buckets(m, gamma, MODULI_OMR_PT[0], tx_hashes.len(), &mut rng);
     let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
 
-    let pertinency_cts_path = PathBuf::from_str("generated/outputs/pertinencyCts").unwrap();
+    let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
     // read p_ct and the payloads
     tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
         let mut p_ct_path = pertinency_cts_path.clone();
@@ -460,22 +465,7 @@ fn main() {
             first_tx,
             last_tx,
         } => {
-            println!("{first_tx}-{last_tx}");
-            // let bfv_params = Arc::new(
-            //     BfvParametersBuilder::new()
-            //         .set_degree(DEGREE)
-            //         .set_plaintext_modulus(MODULI_OMR_PT[0])
-            //         .set_moduli_sizes(OMR_S_SIZES)
-            //         .build()
-            //         .unwrap(),
-            // );
-            // let mut rng = thread_rng();
-            // let mut select = vec![0u64; bfv_params.degree()];
-            // select[0] = 1;
-            // let select_pt: Plaintext =
-            //     Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
-
-            // let sk = SecretKey::random(&bfv_params, &mut rng);
+            create_digest1(pertinency_cts, output_dir, first_tx, last_tx);
         }
         Command::CreateDigest2 {
             messages,
@@ -484,9 +474,6 @@ fn main() {
             first_tx,
             last_tx,
             k,
-        } => {
-            println!("{first_tx}-{last_tx}");
-            // create_digest2(messages, pertinency_cts, output_dir, from_tx, last_tx, k);
-        }
+        } => create_digest2(messages, pertinency_cts, output_dir, first_tx, last_tx, k),
     }
 }

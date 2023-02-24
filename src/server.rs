@@ -34,6 +34,15 @@ pub struct MessageDigest {
     pub seed: [u8; 32],
 }
 
+pub struct Digest1 {
+    pub cts: Vec<Ciphertext>,
+}
+
+pub struct Digest2 {
+    pub cts: Vec<Ciphertext>,
+    pub seed: [u8; 32],
+}
+
 pub fn default_bfv() -> BfvParameters {
     BfvParametersBuilder::new()
         .set_degree(DEGREE)
@@ -765,6 +774,8 @@ mod tests {
     use rand::{thread_rng, Rng};
     use std::hash::Hash;
     use std::io::Write;
+    use std::path::PathBuf;
+    use std::str::FromStr;
 
     #[test]
     fn server_process_test() {
@@ -1743,5 +1754,28 @@ mod tests {
 
         println!("Pertinent count: {:?}", pertinent_file_names.len());
         println!("Pertinent file names: {:?}", pertinent_file_names);
+    }
+
+    #[test]
+    fn gen_and_save_random_data() {
+        let mut rng = thread_rng();
+
+        let output_dir = PathBuf::from_str("generated/messages").unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        for index in 0..(1 << 15) {
+            let values: Vec<u8> = rng
+                .clone()
+                .sample_iter(Uniform::new(0, 255))
+                .take(400)
+                .collect_vec();
+
+            let mut path = output_dir.clone();
+            path.push(format!("{index}"));
+            std::fs::File::create(path)
+                .unwrap()
+                .write_all(&values)
+                .unwrap();
+        }
     }
 }

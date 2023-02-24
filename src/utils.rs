@@ -19,8 +19,12 @@ use std::{collections::HashMap, fs::File};
 use crate::{
     client::gen_pvw_sk_cts,
     pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
-    server::{DetectionKey, MessageDigest},
+    server::{DetectionKey, Digest1, Digest2, MessageDigest},
 };
+
+pub fn gen_srlc_params(k: usize) -> (usize, usize, usize) {
+    (k, k * 2, 5)
+}
 
 pub fn read_range_coeffs() -> Vec<u64> {
     let bytes = include_bytes!("../params_850.bin");
@@ -493,6 +497,46 @@ pub fn deserialize_message_digest(bfv_params: &Arc<BfvParameters>, bytes: &[u8])
     }
 
     MessageDigest { seed, pv, msgs }
+}
+
+pub fn serialize_digest1(digest: &Digest1) -> Vec<u8> {
+    let mut s = vec![];
+    digest.cts.iter().for_each(|c| {
+        s.extend_from_slice(c.to_bytes().as_slice());
+    });
+    s
+}
+
+pub fn deserialize_digest1(bytes: &[u8], bfv_params: &Arc<BfvParameters>) -> Digest1 {
+    let ct_size = 327714;
+    let cts = bytes
+        .chunks_exact(ct_size)
+        .map(|ct_bytes| Ciphertext::from_bytes(ct_bytes, bfv_params).unwrap())
+        .collect_vec();
+    Digest1 { cts }
+}
+
+pub fn serialize_digest2(digest: &Digest2) -> Vec<u8> {
+    let mut s = vec![];
+    s.extend_from_slice(digest.seed.as_slice());
+    digest.cts.iter().for_each(|c| {
+        s.extend_from_slice(c.to_bytes().as_slice());
+    });
+    s
+}
+
+pub fn deserialize_digest2(bytes: &[u8], bfv_params: &Arc<BfvParameters>) -> Digest2 {
+    let ct_size = 327714;
+
+    let mut seed: [u8; 32] = [0u8; 32];
+    seed.copy_from_slice(&bytes[..32]);
+
+    let bytes = bytes[32..].to_vec();
+    let cts = bytes
+        .chunks_exact(ct_size)
+        .map(|ct_bytes| Ciphertext::from_bytes(ct_bytes, bfv_params).unwrap())
+        .collect_vec();
+    Digest2 { cts, seed }
 }
 
 pub fn random_data(size_bits: usize) -> Vec<u64> {
