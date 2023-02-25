@@ -11,16 +11,39 @@ use fhe_traits::{Deserialize, DeserializeParametrized, Serialize};
 use itertools::Itertools;
 use rand::{distributions::Uniform, prelude::Distribution, CryptoRng, RngCore};
 use rand::{thread_rng, Rng};
-use std::io::Write;
 use std::sync::Arc;
 use std::vec;
 use std::{collections::HashMap, fs::File};
+use std::{io::Write, path::PathBuf};
 
 use crate::{
     client::gen_pvw_sk_cts,
     pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
     server::{DetectionKey, Digest1, Digest2, MessageDigest},
 };
+
+/// returns (file_name, tx_hash) array sorted by corresponding tx_index
+pub fn get_mapping(messages: PathBuf, first_tx: usize, last_tx: usize) -> Vec<(String, String)> {
+    let mut tx_map = HashMap::new();
+    for entry in walkdir::WalkDir::new(messages).min_depth(1) {
+        let file_name = entry.unwrap();
+        let file_name = file_name.file_name().to_str().unwrap().to_string();
+        let splits = file_name.split('_').map(|v| v.to_string()).collect_vec();
+        tx_map.insert(
+            splits[0].parse::<usize>().unwrap(),
+            (file_name, splits[1].clone()),
+        );
+    }
+
+    let mut mapping = vec![];
+    for index in first_tx..last_tx {
+        if let Some(val) = tx_map.get(&index) {
+            mapping.push(val.clone());
+        }
+    }
+
+    mapping
+}
 
 pub fn gen_srlc_params(k: usize) -> (usize, usize, usize) {
     (k, k * 2, 5)

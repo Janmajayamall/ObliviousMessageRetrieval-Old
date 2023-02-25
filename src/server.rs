@@ -759,8 +759,9 @@ mod tests {
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
         assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
-        gen_rot_keys_inner_product, gen_rot_keys_pv_selector, map_rlks_to_multiplicators,
-        powers_of_x_poly, range_fn_poly, serialize_detection_key, solve_equations,
+        gen_rot_keys_inner_product, gen_rot_keys_pv_selector, get_mapping,
+        map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly, serialize_detection_key,
+        solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, OMR_S_SIZES};
     use fhe::bfv::EvaluationKeyBuilder;
@@ -1777,5 +1778,42 @@ mod tests {
                 .write_all(&values)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn test_retrieval() {
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_moduli(MODULI_OMR)
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk: Vec<i64> =
+            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
+        let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
+
+        let mapping = get_mapping("generated/test1/messages".into(), 0, 32768);
+        mapping
+            .iter()
+            .enumerate()
+            .for_each(|(i, (tx_file_name, tx_hash))| {
+                let ct = Ciphertext::from_bytes(
+                    &std::fs::read(format!("generated/test1/output/{tx_hash}")).unwrap(),
+                    &bfv_params,
+                )
+                .unwrap();
+                if Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&ct).unwrap(), Encoding::simd())
+                    .unwrap()
+                    .iter()
+                    .product::<u64>()
+                    == 1
+                {
+                    let tx =
+                        std::fs::read(format!("generated/test1/messages/{tx_file_name}")).unwrap();
+                    println!("index: {i}; tx: {:?}", hex::encode(tx));
+                }
+            })
     }
 }

@@ -24,6 +24,9 @@ clap = { version = "4.1.4", features = ["derive"] }
 quote = "1.0.23"
 walkdir = "2.3.2"
 
+[dev-dependencies]
+hex = "0.4.3"
+
 [patch.crates-io]
 fhe = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
 fhe-util = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }

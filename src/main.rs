@@ -16,7 +16,7 @@ use omr::{
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::{
-    prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
+    prelude::{IndexedParallelIterator, ParallelIterator},
     slice::ParallelSlice,
 };
 use std::{
@@ -48,6 +48,9 @@ enum Command {
     },
     CreateDigest1 {
         #[arg(short, long)]
+        messages: std::path::PathBuf,
+
+        #[arg(short, long)]
         pertinency_cts: std::path::PathBuf,
 
         #[arg(short, long)]
@@ -78,31 +81,6 @@ enum Command {
         #[arg(short, long)]
         k: usize,
     },
-}
-
-/// returns (file_name, tx_hash) array sorted by corresponding tx_index
-fn get_mapping(first_tx: usize, last_tx: usize) -> Vec<(String, String)> {
-    let messages = PathBuf::from_str("").unwrap();
-
-    let mut tx_map = HashMap::new();
-    for entry in walkdir::WalkDir::new(messages).max_depth(1) {
-        let file_name = entry.unwrap();
-        let file_name = file_name.file_name().to_str().unwrap().to_string();
-        let splits = file_name.split('_').map(|v| v.to_string()).collect_vec();
-        tx_map.insert(
-            splits[0].parse::<usize>().unwrap(),
-            (file_name, splits[1].clone()),
-        );
-    }
-
-    let mut mapping = vec![];
-    for index in first_tx..last_tx {
-        if let Some(val) = tx_map.get(&index) {
-            mapping.push(val.clone());
-        }
-    }
-
-    mapping
 }
 
 fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
@@ -224,10 +202,10 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
 fn create_digest2(
     messages: PathBuf,
     pertinency_cts: PathBuf,
-    output_dir: PathBuf,
+    mut output_dir: PathBuf,
     first_tx: usize,
     last_tx: usize,
-    k: usize,
+    max_txs: usize,
 ) {
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -238,14 +216,16 @@ fn create_digest2(
             .unwrap(),
     );
 
-    let mut tx_hashes = get_mapping(first_tx, last_tx);
+    let mut tx_hashes = get_mapping(messages.clone(), first_tx, last_tx);
     // let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
 
     let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
     thread_rng().fill(&mut seed);
     let mut rng = ChaChaRng::from_seed(seed);
 
-    let max_txs = 64;
+    let msg_ct_count = ((max_txs as f64) / 64.0).ceil() as usize;
+    let max_txs = msg_ct_count * 64;
+    dbg!(max_txs);
     let (k, m, gamma) = gen_srlc_params(max_txs);
     let message_size = 512;
     let bucket_row_span = 256;
@@ -253,7 +233,7 @@ fn create_digest2(
         assign_buckets(m, gamma, MODULI_OMR_PT[0], tx_hashes.len(), &mut rng);
     let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
 
-    let mut msg_ct = Ciphertext::zero(&bfv_params);
+    let mut msg_cts = vec![Ciphertext::zero(&bfv_params); msg_ct_count];
 
     // let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
     // let messages = PathBuf::from_str("generated/messages").unwrap();
@@ -271,7 +251,13 @@ fn create_digest2(
                         let mut tx = std::fs::read(m_path)
                             .unwrap()
                             .chunks(2)
-                            .map(|two_bytes| (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 8))
+                            .map(|two_bytes| {
+                                if two_bytes.len() == 1 {
+                                    (two_bytes[0] as u64)
+                                } else {
+                                    (two_bytes[0] as u64) + ((two_bytes[1] as u64) << 8)
+                                }
+                            })
                             .collect_vec();
 
                         // fill in empty bytes till len isn't equal to 512/2
@@ -282,21 +268,33 @@ fn create_digest2(
                     };
 
                     // add message
-                    let mut m_pt = vec![0u64; bfv_params.degree()];
+                    let mut m_pts = vec![vec![0u64; bfv_params.degree()]; msg_ct_count];
                     for i in 0..gamma {
                         let bucket = assigned_buckets[index][i];
                         let weight = assigned_weights[index][i];
 
-                        let start_row = bucket_row_span * bucket;
-                        for j in start_row..start_row + bucket_row_span {
-                            m_pt[j] = q_mod.mul(tx[j - start_row], weight);
+                        let row = bucket_row_span * bucket;
+                        for j in row..(row + bucket_row_span) {
+                            m_pts[j / bfv_params.degree()][j % bfv_params.degree()] =
+                                q_mod.mul(tx[j - row], weight);
                         }
                     }
-                    let m_pt =
-                        Plaintext::try_encode(&m_pt, Encoding::simd_at_level(13), &bfv_params)
-                            .unwrap();
-                    p_ct *= &m_pt;
-                    msg_ct += &p_ct;
+                    let m_pts = m_pts.iter().map(|pt| {
+                        Plaintext::try_encode(pt, Encoding::simd_at_level(13), &bfv_params).unwrap()
+                    });
+
+                    msg_cts
+                        .iter_mut()
+                        .zip(m_pts)
+                        .enumerate()
+                        .for_each(|(i, (c, pt))| {
+                            if i == msg_ct_count - 1 {
+                                p_ct *= &pt;
+                                *c += &p_ct;
+                            } else {
+                                *c += &(&p_ct * &pt);
+                            }
+                        });
                 } else {
                     println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
                 }
@@ -305,22 +303,28 @@ fn create_digest2(
             }
         });
 
-    msg_ct.mod_switch_to_last_level();
+    msg_cts.iter_mut().for_each(|ct| {
+        ct.mod_switch_to_last_level();
+    });
 
-    let digest = Digest2 {
-        seed,
-        cts: vec![msg_ct],
-    };
+    let digest = Digest2 { seed, cts: msg_cts };
 
-    std::fs::create_dir_all(output_dir).expect("Output directory should exist");
-    let mut file = std::fs::File::create(format!("digest2-{first_tx}-{last_tx}"))
+    std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
+    output_dir.push(format!("digest2-{first_tx}-{last_tx}"));
+    let mut file = std::fs::File::create(output_dir)
         .expect("File creation for storing digest one should succeed");
     file.write_all(&serialize_digest2(&digest))
         .expect("Writing digest buffer to digest file should succeed");
 }
 
-fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize, last_tx: usize) {
-    let tx_hashes = get_mapping(first_tx, last_tx);
+fn create_digest1(
+    messages: PathBuf,
+    pertinency_cts: PathBuf,
+    output_dir: PathBuf,
+    first_tx: usize,
+    last_tx: usize,
+) {
+    let tx_hashes = get_mapping(messages, first_tx, last_tx);
     // let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
 
     let bfv_params = Arc::new(
@@ -364,22 +368,22 @@ fn create_digest1(pertinency_cts: PathBuf, output_dir: PathBuf, first_tx: usize,
 
     let pv_ct_byes = pv_ct.to_bytes();
 
-    {
-        let key: Vec<i64> =
-            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
-        let sk = SecretKey::new(key, &bfv_params);
-        let values = pv_decompress(
-            &Vec::<u64>::try_decode(&sk.try_decrypt(&pv_ct).unwrap(), Encoding::simd()).unwrap(),
-            16,
-        );
-        let mut detected_indices = vec![];
-        values.iter().enumerate().for_each(|(index, v)| {
-            if *v == 1 {
-                detected_indices.push(index);
-            }
-        });
-        dbg!(detected_indices);
-    }
+    // {
+    //     let key: Vec<i64> =
+    //         bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
+    //     let sk = SecretKey::new(key, &bfv_params);
+    //     let values = pv_decompress(
+    //         &Vec::<u64>::try_decode(&sk.try_decrypt(&pv_ct).unwrap(), Encoding::simd()).unwrap(),
+    //         16,
+    //     );
+    //     let mut detected_indices = vec![];
+    //     values.iter().enumerate().for_each(|(index, v)| {
+    //         if *v == 1 {
+    //             detected_indices.push(index);
+    //         }
+    //     });
+    //     dbg!(detected_indices);
+    // }
 
     std::fs::create_dir_all(output_dir).expect("Output directory should exist");
     let mut file = std::fs::File::create(format!("digest1-{first_tx}-{last_tx}"))
@@ -397,12 +401,13 @@ fn main() {
             output_dir,
         } => start_omr(detection_key, clues, output_dir),
         Command::CreateDigest1 {
+            messages,
             pertinency_cts,
             output_dir,
             first_tx,
             last_tx,
         } => {
-            create_digest1(pertinency_cts, output_dir, first_tx, last_tx);
+            create_digest1(messages, pertinency_cts, output_dir, first_tx, last_tx);
         }
         Command::CreateDigest2 {
             messages,
@@ -410,7 +415,14 @@ fn main() {
             output_dir,
             first_tx,
             last_tx,
-            k,
-        } => create_digest2(messages, pertinency_cts, output_dir, first_tx, last_tx, k),
+            k: max_txs,
+        } => create_digest2(
+            messages,
+            pertinency_cts,
+            output_dir,
+            first_tx,
+            last_tx,
+            max_txs,
+        ),
     }
 }
