@@ -1,8 +1,5 @@
 use crate::pvw::{PvwCiphertext, PvwParameters};
-use crate::utils::{
-    assign_buckets, deserialize_detection_key, gen_rlk_keys, read_range_coeffs,
-    serialize_message_digest,
-};
+use crate::utils::{assign_buckets, read_range_coeffs};
 use crate::{CT_SPAN_COUNT, DEGREE, GAMMA, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, SET_SIZE};
 use byteorder::{ByteOrder, LittleEndian};
 use fhe::bfv::{
@@ -26,12 +23,6 @@ pub struct DetectionKey {
     pub ek3: EvaluationKey,
     pub rlk_keys: HashMap<usize, RelinearizationKey>,
     pub pvw_sk_cts: [Ciphertext; 4],
-}
-
-pub struct MessageDigest {
-    pub pv: Ciphertext,
-    pub msgs: Vec<Ciphertext>,
-    pub seed: [u8; 32],
 }
 
 pub struct Digest1 {
@@ -687,140 +678,29 @@ pub fn phase2(
     (pv, rhs_total)
 }
 
-pub fn server_process(
-    bfv_params: &Arc<BfvParameters>,
-    clues: &[PvwCiphertext],
-    messages: &[Vec<u64>],
-    detection_key: &DetectionKey,
-    multiplicators: &HashMap<usize, Multiplicator>,
-) -> MessageDigest {
-    debug_assert!(clues.len() == messages.len());
-
-    let pvw_params = Arc::new(PvwParameters::default());
-
-    // FIXME: REMOVE THIS
-    let mut rng = thread_rng();
-    let dummy_bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-
-    // phase 1
-    println!("Phase 1...");
-    let mut now = std::time::Instant::now();
-    let mut pertinency_cts = phase1(
-        &bfv_params,
-        &pvw_params,
-        &detection_key.pvw_sk_cts,
-        &detection_key.ek1,
-        &multiplicators,
-        clues,
-        &dummy_bfv_sk,
-    );
-    println!("Phase 1 time: {:?}", now.elapsed());
-
-    // seeded rng for buckets
-    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
-    thread_rng().fill(&mut seed);
-    let mut rng = ChaChaRng::from_seed(seed);
-    let (assigned_buckets, assigned_weights) =
-        assign_buckets(M, GAMMA, MODULI_OMR_PT[0], SET_SIZE, &mut rng);
-
-    println!("Phase 2...");
-    now = std::time::Instant::now();
-    let (pv_ct, msg_cts) = phase2(
-        &assigned_buckets,
-        &assigned_weights,
-        &bfv_params,
-        &detection_key.ek2,
-        &detection_key.ek3,
-        &mut pertinency_cts,
-        messages,
-        32,
-        DEGREE,
-        10,
-        SET_SIZE,
-        GAMMA,
-        CT_SPAN_COUNT,
-        M,
-        M_ROW_SPAN,
-        &dummy_bfv_sk,
-    );
-    println!("Phase 2 time: {:?}", now.elapsed());
-
-    MessageDigest {
-        seed,
-        pv: pv_ct,
-        msgs: msg_cts,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
-        assign_buckets, gen_clues, gen_detection_key, gen_paylods, gen_pertinent_indices,
-        gen_rot_keys_inner_product, gen_rot_keys_pv_selector, get_mapping,
-        map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly, serialize_detection_key,
-        solve_equations,
+        assign_buckets, deserialize_detection_key, gen_clues, gen_detection_key, gen_paylods,
+        gen_pertinent_indices, gen_rlk_keys, gen_rot_keys_inner_product, gen_rot_keys_pv_selector,
+        get_mapping, map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly,
+        serialize_detection_key, solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, OMR_S_SIZES};
     use fhe::bfv::EvaluationKeyBuilder;
     use fhe_math::rq::traits::TryConvertFrom;
     use fhe_math::rq::{Context, Poly, Representation};
     use fhe_traits::{DeserializeParametrized, FheDecoder, FheDecrypter, FheEncrypter, Serialize};
-    use fhe_util::variance;
     use itertools::izip;
     use rand::distributions::Uniform;
     use rand::prelude::Distribution;
     use rand::{thread_rng, Rng};
-    use std::hash::Hash;
     use std::io::Write;
     use std::path::PathBuf;
     use std::str::FromStr;
-
-    #[test]
-    fn server_process_test() {
-        let mut rng = thread_rng();
-        let bfv_params = Arc::new(
-            BfvParametersBuilder::new()
-                .set_degree(DEGREE)
-                .set_moduli(MODULI_OMR)
-                .set_plaintext_modulus(MODULI_OMR_PT[0])
-                .build()
-                .unwrap(),
-        );
-
-        let pvw_params = Arc::new(PvwParameters::default());
-
-        // CLIENT SETUP //
-        let bfv_sk = SecretKey::random(&bfv_params, &mut rng);
-        let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-        let pvw_pk = pvw_sk.public_key(&mut rng);
-        let detection_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
-        let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
-
-        // gen clues
-        let mut pertinent_indices = gen_pertinent_indices(50, SET_SIZE);
-        pertinent_indices.sort();
-        println!("Pertinent indices: {:?}", pertinent_indices);
-
-        let clues = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, SET_SIZE);
-        let payloads = gen_paylods(SET_SIZE);
-        println!("Clues generated");
-
-        let msg_digest = server_process(
-            &bfv_params,
-            &clues,
-            &payloads,
-            &detection_key,
-            &multiplicators,
-        );
-
-        // std::fs::File::create("target/message.bin")
-        //     .unwrap()
-        //     .write_all(&msg_digest)
-        //     .unwrap();
-    }
 
     #[test]
     fn test_phase1_and_phase2() {

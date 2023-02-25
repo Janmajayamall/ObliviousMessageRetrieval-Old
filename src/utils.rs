@@ -19,7 +19,7 @@ use std::{io::Write, path::PathBuf};
 use crate::{
     client::gen_pvw_sk_cts,
     pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey},
-    server::{DetectionKey, Digest1, Digest2, MessageDigest},
+    server::{DetectionKey, Digest1, Digest2},
 };
 
 /// returns (file_name, tx_hash) array sorted by corresponding tx_index
@@ -113,7 +113,7 @@ pub fn assign_buckets<R: CryptoRng + RngCore>(
     for row_index in 0..set_size {
         while buckets[row_index].len() != gamma {
             // random bucket
-            let bucket = rng.sample(Uniform::new(0, no_of_buckets));
+            let bucket = rng.sample(Uniform::new(0, no_of_buckets as u64)) as usize;
 
             // avoid duplicate buckets
             if !buckets[row_index].contains(&bucket) {
@@ -176,7 +176,7 @@ pub fn solve_equations(
 
         // Not solvable
         if pivot_rows[pi] == -1 {
-            println!("Unsolvable!");
+            // println!("Unsolvable!");
 
             break;
         }
@@ -488,38 +488,6 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
         rlk_keys,
         pvw_sk_cts,
     }
-}
-
-pub fn serialize_message_digest(digest: &MessageDigest) -> Vec<u8> {
-    let mut s = vec![];
-
-    s.extend_from_slice(digest.seed.as_slice());
-    s.extend_from_slice(digest.pv.to_bytes().as_slice());
-    digest.msgs.iter().for_each(|c| {
-        s.extend_from_slice(c.to_bytes().as_slice());
-    });
-
-    s
-}
-
-pub fn deserialize_message_digest(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> MessageDigest {
-    let ct_size = 327714;
-    let mut offset = 0;
-
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&bytes[..32]);
-    offset += 32;
-
-    let pv = Ciphertext::from_bytes(&bytes[offset..(offset + ct_size)], bfv_params).unwrap();
-    offset += ct_size;
-
-    let mut msgs = vec![];
-    while offset < bytes.len() {
-        msgs.push(Ciphertext::from_bytes(&bytes[offset..(offset + ct_size)], bfv_params).unwrap());
-        offset += ct_size;
-    }
-
-    MessageDigest { seed, pv, msgs }
 }
 
 pub fn serialize_digest1(digest: &Digest1) -> Vec<u8> {
