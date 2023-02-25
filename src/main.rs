@@ -320,7 +320,7 @@ fn create_digest2(
 fn create_digest1(
     messages: PathBuf,
     pertinency_cts: PathBuf,
-    output_dir: PathBuf,
+    mut output_dir: PathBuf,
     first_tx: usize,
     last_tx: usize,
 ) {
@@ -385,8 +385,9 @@ fn create_digest1(
     //     dbg!(detected_indices);
     // }
 
-    std::fs::create_dir_all(output_dir).expect("Output directory should exist");
-    let mut file = std::fs::File::create(format!("digest1-{first_tx}-{last_tx}"))
+    std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
+    output_dir.push(format!("digest1-{first_tx}-{last_tx}"));
+    let mut file = std::fs::File::create(output_dir)
         .expect("File creation for storing digest one should succeed");
     file.write_all(&pv_ct_byes)
         .expect("Writing digest buffer to digest file should succeed");

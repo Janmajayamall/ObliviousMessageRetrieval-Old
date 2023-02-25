@@ -1674,7 +1674,7 @@ mod tests {
             bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
         let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
 
-        let mapping = get_mapping("generated/test1/messages".into(), 0, 32768);
+        let mapping = get_mapping("generated/test1/messages".into(), 21000, 80000);
         mapping
             .iter()
             .enumerate()
