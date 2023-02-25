@@ -143,9 +143,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "783fe232adfca04f90f56201b26d79682d4cd2625e0bc7290b95123afe558ade"
+checksum = "350b9cf31731f9957399229e9b2adc51eeabdfbe9d71d9a0552275fd12710d09"
 dependencies = [
  "os_str_bytes",
 ]
@@ -271,7 +271,7 @@ dependencies = [
 [[package]]
 name = "fhe"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#d5651aba1a4bf18d5350e4104aab5c9feca40fb3"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#2a7c0dad13a491d28d8eec2d304fb91432e90558"
 dependencies = [
  "fhe-math",
  "fhe-traits",
@@ -291,7 +291,7 @@ dependencies = [
 [[package]]
 name = "fhe-math"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#d5651aba1a4bf18d5350e4104aab5c9feca40fb3"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#2a7c0dad13a491d28d8eec2d304fb91432e90558"
 dependencies = [
  "crypto-bigint",
  "fhe-traits",
@@ -314,7 +314,7 @@ dependencies = [
 [[package]]
 name = "fhe-traits"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#d5651aba1a4bf18d5350e4104aab5c9feca40fb3"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#2a7c0dad13a491d28d8eec2d304fb91432e90558"
 dependencies = [
  "rand",
 ]
@@ -322,7 +322,7 @@ dependencies = [
 [[package]]
 name = "fhe-util"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#d5651aba1a4bf18d5350e4104aab5c9feca40fb3"
+source = "git+https://github.com/Janmajayamall/fhe.rs.git?branch=simd#2a7c0dad13a491d28d8eec2d304fb91432e90558"
 dependencies = [
  "itertools",
  "num-bigint-dig",
@@ -1000,9 +1000,9 @@ checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
 
 [[package]]
 name = "syn"
-version = "1.0.108"
+version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d56e159d99e6c2b93995d171050271edb50ecc5288fbc7cc17de8fdce4e58c14"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1158,9 +1158,9 @@ dependencies = [
 
 [[package]]
 name = "wide"
-version = "0.7.6"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feff0a412894d67223777b6cc8d68c0dab06d52d95e9890d5f2d47f10dd9366c"
+checksum = "b3c11d2adfe89e9da42f01023d2c2998c53aa916ef4d26ca716dbb983725c0d2"
 dependencies = [
  "bytemuck",
  "safe_arch",
