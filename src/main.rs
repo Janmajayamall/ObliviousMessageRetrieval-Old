@@ -211,7 +211,7 @@ fn create_digest2(
         BfvParametersBuilder::new()
             .set_degree(DEGREE)
             .set_plaintext_modulus(MODULI_OMR_PT[0])
-            .set_moduli_sizes(OMR_S_SIZES)
+            .set_moduli(MODULI_OMR)
             .build()
             .unwrap(),
     );
