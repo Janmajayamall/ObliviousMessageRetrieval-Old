@@ -129,12 +129,12 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                     Ok(clue) => match PvwCiphertext::from_bytes(&clue, &pvw_params) {
                         Some(clue) => clue,
                         None => {
-                            println!("Incorrect encoding of clue at: {path:?}");
+                            eprintln!("Incorrect encoding of clue at: {path:?}");
                             fake_clue.clone()
                         }
                     },
                     Err(e) => {
-                        println!("Failed to read clue at: {path:?} due to error: {e:?}",);
+                        eprintln!("Failed to read clue at: {path:?} due to error: {e:?}",);
                         fake_clue.clone()
                     }
                 })
@@ -189,10 +189,10 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                     .and_then(|mut f| f.write_all(p_ct.to_bytes().as_slice()))
                 {
                     Ok(_) => {
-                        println!("Pertinency Ct write to {file_path:?} success");
+                        eprintln!("Pertinency Ct write to {file_path:?} success");
                     }
                     Err(e) => {
-                        println!("Pertinency Ct write to {file_path:?} failed with error: {e}");
+                        eprintln!("Pertinency Ct write to {file_path:?} failed with error: {e}");
                     }
                 }
             });
@@ -296,10 +296,10 @@ fn create_digest2(
                             }
                         });
                 } else {
-                    println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                    eprintln!("Skipping tx hash: {tx_hash} due malformed p_ct file");
                 }
             } else {
-                println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
+                eprintln!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
         });
 
@@ -311,10 +311,12 @@ fn create_digest2(
 
     std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
     output_dir.push(format!("digest2-{first_tx}-{last_tx}"));
-    let mut file = std::fs::File::create(output_dir)
+    let mut file = std::fs::File::create(&output_dir)
         .expect("File creation for storing digest one should succeed");
     file.write_all(&serialize_digest2(&digest))
         .expect("Writing digest buffer to digest file should succeed");
+
+    println!("{}", output_dir.to_str().unwrap());
 }
 
 fn create_digest1(
@@ -347,6 +349,7 @@ fn create_digest1(
         .for_each(|(index, (_, tx_hash))| {
             let mut p_ct_path = pertinency_cts.clone();
             p_ct_path.push(format!("{tx_hash}"));
+            // let now = std::time::Instant::now();
             if let Ok(p_ct) = std::fs::read(p_ct_path) {
                 if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
                     // add pertinency bit
@@ -357,11 +360,12 @@ fn create_digest1(
                     p_ct *= &pt;
                     pv_ct += &p_ct;
                 } else {
-                    println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                    eprintln!("Skipping tx hash: {tx_hash} due malformed p_ct file");
                 }
             } else {
-                println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
+                eprintln!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
+            // println!("time: {:?}", now.elapsed());
         });
 
     pv_ct.mod_switch_to_last_level();
@@ -387,10 +391,12 @@ fn create_digest1(
 
     std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
     output_dir.push(format!("digest1-{first_tx}-{last_tx}"));
-    let mut file = std::fs::File::create(output_dir)
+    let mut file = std::fs::File::create(&output_dir)
         .expect("File creation for storing digest one should succeed");
     file.write_all(&pv_ct_byes)
         .expect("Writing digest buffer to digest file should succeed");
+
+    println!("{}", output_dir.to_str().unwrap());
 }
 
 fn main() {
