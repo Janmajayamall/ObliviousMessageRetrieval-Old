@@ -225,7 +225,6 @@ fn create_digest2(
 
     let msg_ct_count = ((max_txs as f64) / 64.0).ceil() as usize;
     let max_txs = msg_ct_count * 64;
-    dbg!(max_txs);
     let (k, m, gamma) = gen_srlc_params(max_txs);
     let message_size = 512;
     let bucket_row_span = 256;
