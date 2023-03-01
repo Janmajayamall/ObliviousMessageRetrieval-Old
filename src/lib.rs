@@ -24,7 +24,7 @@ pub const MODULI_OMR: &[u64; 15] = &[
 ];
 pub const DEGREE: usize = 1 << 15;
 pub const MODULI_OMR_PT: &[u64; 1] = &[65537];
-pub const SET_SIZE: usize = 1 << 15;
+pub const SET_SIZE: usize = 1 << 19;
 pub const VARIANCE: usize = 10;
 
 // SRLC params
