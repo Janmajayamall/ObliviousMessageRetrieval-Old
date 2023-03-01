@@ -22,7 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 protobuf = "3.2.0"
 
 [patch.crates-io]
-fhe = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
-fhe-util = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
-fhe-traits = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
-fhe-math = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd" }
+fhe = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd-ntthexl" }
+fhe-util = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd-ntthexl" }
+fhe-traits = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd-ntthexl" }
+fhe-math = { git =  "https://github.com/Janmajayamall/fhe.rs.git", branch = "simd-ntthexl" }
