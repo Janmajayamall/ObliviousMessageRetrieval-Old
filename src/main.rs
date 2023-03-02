@@ -129,12 +129,12 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                     Ok(clue) => match PvwCiphertext::from_bytes(&clue, &pvw_params) {
                         Some(clue) => clue,
                         None => {
-                            eprintln!("Incorrect encoding of clue at: {path:?}");
+                            println!("Incorrect encoding of clue at: {path:?}");
                             fake_clue.clone()
                         }
                     },
                     Err(e) => {
-                        eprintln!("Failed to read clue at: {path:?} due to error: {e:?}",);
+                        println!("Failed to read clue at: {path:?} due to error: {e:?}",);
                         fake_clue.clone()
                     }
                 })
@@ -189,10 +189,10 @@ fn start_omr(detection_key: PathBuf, clues: PathBuf, output_dir: PathBuf) {
                     .and_then(|mut f| f.write_all(p_ct.to_bytes().as_slice()))
                 {
                     Ok(_) => {
-                        eprintln!("Pertinency Ct write to {file_path:?} success");
+                        println!("Pertinency Ct write to {file_path:?} success");
                     }
                     Err(e) => {
-                        eprintln!("Pertinency Ct write to {file_path:?} failed with error: {e}");
+                        println!("Pertinency Ct write to {file_path:?} failed with error: {e}");
                     }
                 }
             });
@@ -295,10 +295,10 @@ fn create_digest2(
                             }
                         });
                 } else {
-                    eprintln!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                    println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
                 }
             } else {
-                eprintln!("Skipping tx hash: {tx_hash} due to missing p_ct file");
+                println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
         });
 
@@ -359,10 +359,10 @@ fn create_digest1(
                     p_ct *= &pt;
                     pv_ct += &p_ct;
                 } else {
-                    eprintln!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+                    println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
                 }
             } else {
-                eprintln!("Skipping tx hash: {tx_hash} due to missing p_ct file");
+                println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
             // println!("time: {:?}", now.elapsed());
         });
@@ -370,23 +370,6 @@ fn create_digest1(
     pv_ct.mod_switch_to_last_level();
 
     let pv_ct_byes = pv_ct.to_bytes();
-
-    // {
-    //     let key: Vec<i64> =
-    //         bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
-    //     let sk = SecretKey::new(key, &bfv_params);
-    //     let values = pv_decompress(
-    //         &Vec::<u64>::try_decode(&sk.try_decrypt(&pv_ct).unwrap(), Encoding::simd()).unwrap(),
-    //         16,
-    //     );
-    //     let mut detected_indices = vec![];
-    //     values.iter().enumerate().for_each(|(index, v)| {
-    //         if *v == 1 {
-    //             detected_indices.push(index);
-    //         }
-    //     });
-    //     dbg!(detected_indices);
-    // }
 
     std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
     output_dir.push(format!("digest1-{first_tx}-{last_tx}"));
