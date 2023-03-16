@@ -13,7 +13,7 @@ use omr::{
     utils::*,
     DEGREE, GAMMA, K, M, MODULI_OMR, MODULI_OMR_PT, M_ROW_SPAN, OMR_S_SIZES, SET_SIZE,
 };
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{distributions::Uniform, thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::{
     prelude::{IndexedParallelIterator, ParallelIterator},
@@ -217,7 +217,7 @@ fn create_digest2(
     );
 
     let mut tx_hashes = get_mapping(messages.clone(), first_tx, last_tx);
-    // let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
+    // let tx_hashes = { (0usize..(1 << 19)).into_iter().collect_vec() };
 
     let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
     thread_rng().fill(&mut seed);
@@ -325,8 +325,16 @@ fn create_digest1(
     first_tx: usize,
     last_tx: usize,
 ) {
-    let tx_hashes = get_mapping(messages, first_tx, last_tx);
+    let mut tx_hashes = get_mapping(messages, first_tx, last_tx);
     // let tx_hashes = { (0usize..(1 << 15)).into_iter().collect_vec() };
+
+    let distr = Uniform::new(0, 1 << 19);
+    let mut rng = thread_rng();
+    dbg!(tx_hashes.len());
+    while tx_hashes.len() < (1 << 17) {
+        tx_hashes.push(tx_hashes[1].clone());
+    }
+    dbg!(tx_hashes.len());
 
     let bfv_params = Arc::new(
         BfvParametersBuilder::new()
@@ -340,6 +348,14 @@ fn create_digest1(
     let mut pv_ct = Ciphertext::zero(&bfv_params);
 
     // let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
+    let bfv_sk: Vec<i64> = bincode::deserialize(
+        &std::fs::read(
+            "/Users/janmajayamall/desktop/delete/aztec-tmp-cli/generated/keys/bfvPrivKey",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
 
     // read p_ct and build pv_ct
     tx_hashes
@@ -364,6 +380,12 @@ fn create_digest1(
             } else {
                 println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
             }
+
+            if index % 1000 == 0 {
+                unsafe {
+                    dbg!(bfv_sk.measure_noise(&pv_ct));
+                }
+            }
             // println!("time: {:?}", now.elapsed());
         });
 
@@ -381,37 +403,244 @@ fn create_digest1(
     println!("{}", output_dir.to_str().unwrap());
 }
 
-fn main() {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::StartOMR {
-            detection_key,
-            clues,
-            output_dir,
-        } => start_omr(detection_key, clues, output_dir),
-        Command::CreateDigest1 {
-            messages,
-            pertinency_cts,
-            output_dir,
-            first_tx,
-            last_tx,
-        } => {
-            create_digest1(messages, pertinency_cts, output_dir, first_tx, last_tx);
+fn fake_omr(output_dir: PathBuf) {
+    let mut rng = thread_rng();
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            // .set_moduli(MODULI_OMR)
+            .set_moduli_sizes(OMR_S_SIZES)
+            .build()
+            .unwrap(),
+    );
+
+    let bfv_sk = {
+        let bytes = std::fs::read("generated/keys/bfvPrivKey").unwrap();
+        let key: Vec<i64> = bincode::deserialize(&bytes).unwrap();
+        SecretKey::new(key, &bfv_params)
+    };
+
+    let pvw_params = Arc::new(PvwParameters::default());
+    let pvw_sk = {
+        let bytes = std::fs::read("generated/keys/cluePrivKey").unwrap();
+        PvwSecretKey::from_bytes(&bytes, &pvw_params)
+    };
+    let pvw_pk = Arc::new(pvw_sk.public_key(&mut rng));
+
+    let detection_key = gen_detection_key(&bfv_params, &pvw_params, &bfv_sk, &pvw_sk, &mut rng);
+
+    let mut pertinent_indices = [1, 2, 3, 4, 5, 6];
+    println!("Pertinent indices: {:?}", pertinent_indices);
+    let clues_parent = gen_clues(&pvw_params, &pvw_pk, &pertinent_indices, 1 << 15);
+
+    let multiplicators = map_rlks_to_multiplicators(&detection_key.rlk_keys);
+
+    std::fs::create_dir_all(&output_dir).expect("Failed to setup output directory");
+
+    clues_parent
+        .par_chunks(1 << 15)
+        .enumerate()
+        .for_each(|(batch_index, clues)| {
+            println!("Process clue batch: {batch_index}");
+
+            println!("Decrypt_pvw of batch: {batch_index}");
+            let decrypted_clues = decrypt_pvw(
+                &bfv_params,
+                &pvw_params,
+                detection_key.pvw_sk_cts.to_vec(),
+                &detection_key.ek1,
+                &clues,
+                &bfv_sk,
+            );
+
+            unsafe {
+                println!();
+                decrypted_clues.iter().for_each(|c| {
+                    println!("Decrypted clue noise: {}", bfv_sk.measure_noise(c).unwrap());
+                })
+            }
+
+            println!("Range_fn of batch: {batch_index}");
+            let mut ranged_decrypted_clues = decrypted_clues
+                .iter()
+                .map(|ct| range_fn(&bfv_params, ct, &multiplicators, 1, &bfv_sk))
+                .collect_vec();
+
+            unsafe {
+                println!();
+                ranged_decrypted_clues.iter().for_each(|c| {
+                    println!("Ranged noise: {}", bfv_sk.measure_noise(c).unwrap());
+                })
+            }
+
+            println!("Mul_many of batch: {batch_index}");
+            mul_many(&mut ranged_decrypted_clues, &multiplicators, 10);
+
+            unsafe {
+                println!();
+                println!(
+                    "Mul many noise: {}",
+                    bfv_sk.measure_noise(&ranged_decrypted_clues[0]).unwrap()
+                );
+            }
+
+            let left_rot_key = &detection_key.ek2;
+            let inner_sum_key = &detection_key.ek3;
+            let mut pertinency_ct = ranged_decrypted_clues[0].clone();
+            let mut select = vec![0u64; bfv_params.degree()];
+            select[0] = 1;
+            let select_pt =
+                Plaintext::try_encode(&select, Encoding::simd_at_level(11), &bfv_params).unwrap();
+
+            for index in 0..10 {
+                println!("Processing inner sum for {index}");
+                if index != 0 {
+                    if index == bfv_params.degree() / 2 {
+                        pertinency_ct = left_rot_key.rotates_rows(&pertinency_ct).unwrap();
+                    }
+                    pertinency_ct = left_rot_key.rotates_columns_by(&pertinency_ct, 1).unwrap()
+                }
+                let mut p_ct = &pertinency_ct * &select_pt;
+                p_ct.mod_switch_to_next_level();
+                p_ct.mod_switch_to_next_level();
+                let p_ct = inner_sum_key.computes_inner_sum(&p_ct).unwrap();
+
+                unsafe {
+                    println!();
+                    println!(
+                        "Post inner sum noise for {index}: {}",
+                        bfv_sk.measure_noise(&p_ct).unwrap()
+                    );
+                }
+
+                // save pertinency ciphertext
+                let mut file_path = output_dir.clone();
+                file_path.push(format!("{index}"));
+
+                match std::fs::File::create(file_path.clone())
+                    .and_then(|mut f| f.write_all(p_ct.to_bytes().as_slice()))
+                {
+                    Ok(_) => {
+                        println!("Pertinency Ct write to {file_path:?} success");
+                    }
+                    Err(e) => {
+                        println!("Pertinency Ct write to {file_path:?} failed with error: {e}");
+                    }
+                }
+            }
+
+            // file_paths.iter().enumerate().for_each(|(index, path)| {});
+        });
+}
+
+fn fake_create_digest1(pertinency_cts: PathBuf, mut output_dir: PathBuf) {
+    let tx_hashes = { (0usize..(1 << 19)).into_iter().collect_vec() };
+
+    dbg!(tx_hashes.len());
+
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .set_moduli_sizes(OMR_S_SIZES)
+            .build()
+            .unwrap(),
+    );
+
+    let mut pv_ct = Ciphertext::zero(&bfv_params);
+
+    let bfv_sk: Vec<i64> = bincode::deserialize(
+        &std::fs::read(
+            "/Users/janmajayamall/desktop/delete/aztec-tmp-cli/generated/keys/bfvPrivKey",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
+
+    // read p_ct and build pv_ct
+    tx_hashes.iter().enumerate().for_each(|(index, tx_hash)| {
+        let mut p_ct_path = pertinency_cts.clone();
+        let correct_index = tx_hash % 10;
+        p_ct_path.push(format!("{correct_index}"));
+        // let now = std::time::Instant::now();
+        if let Ok(p_ct) = std::fs::read(p_ct_path) {
+            if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
+                // add pertinency bit
+                let mut pt = vec![0u64; bfv_params.degree()];
+                pt[index / 16] = 1u64 << (index % 16);
+                let pt =
+                    Plaintext::try_encode(&pt, Encoding::simd_at_level(13), &bfv_params).unwrap();
+                p_ct *= &pt;
+                // {
+                //     unsafe {
+                //         dbg!(bfv_sk.measure_noise(&p_ct));
+                //     }
+                // }
+                pv_ct += &p_ct;
+            } else {
+                println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+            }
+        } else {
+            println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
         }
-        Command::CreateDigest2 {
-            messages,
-            pertinency_cts,
-            output_dir,
-            first_tx,
-            last_tx,
-            k: max_txs,
-        } => create_digest2(
-            messages,
-            pertinency_cts,
-            output_dir,
-            first_tx,
-            last_tx,
-            max_txs,
-        ),
-    }
+
+        if index % 1000 == 0 {
+            unsafe {
+                dbg!(bfv_sk.measure_noise(&pv_ct));
+            }
+        }
+        // println!("time: {:?}", now.elapsed());
+    });
+
+    pv_ct.mod_switch_to_last_level();
+
+    let pv_ct_byes = pv_ct.to_bytes();
+
+    std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
+    output_dir.push(format!("digest1"));
+    let mut file = std::fs::File::create(&output_dir)
+        .expect("File creation for storing digest one should succeed");
+    file.write_all(&pv_ct_byes)
+        .expect("Writing digest buffer to digest file should succeed");
+
+    println!("{}", output_dir.to_str().unwrap());
+}
+
+fn main() {
+    // fake_omr("generated/o1".into());
+    fake_create_digest1("generated/o1".into(), "generated/digests".into());
+    // let cli = Cli::parse();
+    // match cli.command {
+    //     Command::StartOMR {
+    //         detection_key,
+    //         clues,
+    //         output_dir,
+    //     } => start_omr(detection_key, clues, output_dir),
+    //     Command::CreateDigest1 {
+    //         messages,
+    //         pertinency_cts,
+    //         output_dir,
+    //         first_tx,
+    //         last_tx,
+    //     } => {
+    //         create_digest1(messages, pertinency_cts, output_dir, first_tx, last_tx);
+    //     }
+    //     Command::CreateDigest2 {
+    //         messages,
+    //         pertinency_cts,
+    //         output_dir,
+    //         first_tx,
+    //         last_tx,
+    //         k: max_txs,
+    //     } => create_digest2(
+    //         messages,
+    //         pertinency_cts,
+    //         output_dir,
+    //         first_tx,
+    //         last_tx,
+    //         max_txs,
+    //     ),
+    // }
 }

@@ -1696,4 +1696,45 @@ mod tests {
                 }
             })
     }
+
+    #[test]
+    fn test_create_digest1() {
+        let bfv_params = Arc::new(
+            BfvParametersBuilder::new()
+                .set_degree(DEGREE)
+                .set_plaintext_modulus(MODULI_OMR_PT[0])
+                .set_moduli(MODULI_OMR)
+                .build()
+                .unwrap(),
+        );
+        let bfv_sk: Vec<i64> =
+            bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
+        let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
+
+        let ct = Ciphertext::from_bytes(
+            &std::fs::read(format!("generated/digests/digest1")).unwrap(),
+            &bfv_params,
+        )
+        .unwrap();
+
+        unsafe {
+            dbg!(bfv_sk.measure_noise(&ct).unwrap());
+        }
+
+        let mut pv =
+            Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&ct).unwrap(), Encoding::simd()).unwrap();
+
+        let mut count = 0;
+        pv.iter_mut().enumerate().for_each(|(index, v)| {
+            for _ in 0..16 {
+                let bit = *v & 1u64;
+                if bit == 1 {
+                    // dbg!(index);
+                    count += 1;
+                }
+                *v >>= 1;
+            }
+        });
+        dbg!(count);
+    }
 }
