@@ -608,9 +608,126 @@ fn fake_create_digest1(pertinency_cts: PathBuf, mut output_dir: PathBuf) {
     println!("{}", output_dir.to_str().unwrap());
 }
 
+fn fake_create_digest2(pertinency_cts: PathBuf, mut output_dir: PathBuf) {
+    let bfv_params = Arc::new(
+        BfvParametersBuilder::new()
+            .set_degree(DEGREE)
+            .set_plaintext_modulus(MODULI_OMR_PT[0])
+            .set_moduli(MODULI_OMR)
+            .build()
+            .unwrap(),
+    );
+
+    // let mut tx_hashes = get_mapping(messages.clone(), first_tx, last_tx);
+    let tx_hashes = { (0usize..(1 << 19)).into_iter().collect_vec() };
+
+    let bfv_sk: Vec<i64> =
+        bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
+    let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
+
+    let mut seed: <ChaChaRng as SeedableRng>::Seed = Default::default();
+    thread_rng().fill(&mut seed);
+    let mut rng = ChaChaRng::from_seed(seed);
+
+    let max_txs = 64;
+    let msg_ct_count = ((max_txs as f64) / 64.0).ceil() as usize;
+    let max_txs = msg_ct_count * 64;
+    let (k, m, gamma) = gen_srlc_params(max_txs);
+    let message_size = 512;
+    let bucket_row_span = 256;
+    let (assigned_buckets, assigned_weights) =
+        assign_buckets(m, gamma, MODULI_OMR_PT[0], tx_hashes.len(), &mut rng);
+    let q_mod = Modulus::new(MODULI_OMR_PT[0]).unwrap();
+
+    let mut msg_cts = vec![Ciphertext::zero(&bfv_params); msg_ct_count];
+
+    // let pertinency_cts_path = PathBuf::from_str("generated/o1").unwrap();
+    // let messages = PathBuf::from_str("generated/messages").unwrap();
+    tx_hashes.iter().enumerate().for_each(|(index, (tx_hash))| {
+        let correct_index = tx_hash % 10;
+        let mut p_ct_path = pertinency_cts.clone();
+        p_ct_path.push(format!("{correct_index}"));
+        if let Ok(p_ct) = std::fs::read(p_ct_path) {
+            if let Ok(mut p_ct) = Ciphertext::from_bytes(&p_ct, &bfv_params) {
+                // unsafe {
+                //     dbg!(bfv_sk.measure_noise(&p_ct));
+                // }
+
+                let tx = {
+                    let mut tx = vec![];
+
+                    // fill in empty bytes till len isn't equal to 512/2
+                    while tx.len() != 256 {
+                        tx.push(rng.sample(Uniform::new(0, 1 << 16)));
+                    }
+                    tx
+                };
+
+                // add message
+                let mut m_pts = vec![vec![0u64; bfv_params.degree()]; msg_ct_count];
+                for i in 0..gamma {
+                    let bucket = assigned_buckets[index][i];
+                    let weight = assigned_weights[index][i];
+
+                    let row = bucket_row_span * bucket;
+                    for j in row..(row + bucket_row_span) {
+                        m_pts[j / bfv_params.degree()][j % bfv_params.degree()] =
+                            q_mod.mul(tx[j - row], weight);
+                    }
+                }
+                let m_pts = m_pts.iter().map(|pt| {
+                    Plaintext::try_encode(pt, Encoding::simd_at_level(13), &bfv_params).unwrap()
+                });
+
+                msg_cts
+                    .iter_mut()
+                    .zip(m_pts)
+                    .enumerate()
+                    .for_each(|(i, (c, pt))| {
+                        if i == msg_ct_count - 1 {
+                            p_ct *= &pt;
+                            // unsafe {
+                            //     dbg!(bfv_sk.measure_noise(&p_ct));
+                            // }
+                            *c += &p_ct;
+                        } else {
+                            *c += &(&p_ct * &pt);
+                        }
+                    });
+
+                if index % 1000 == 0 {
+                    unsafe {
+                        dbg!(bfv_sk.measure_noise(&msg_cts[0]));
+                    }
+                }
+            } else {
+                println!("Skipping tx hash: {tx_hash} due malformed p_ct file");
+            }
+        } else {
+            println!("Skipping tx hash: {tx_hash} due to missing p_ct file");
+        }
+    });
+
+    msg_cts.iter_mut().for_each(|ct| {
+        ct.mod_switch_to_last_level();
+    });
+
+    let digest = Digest2 { seed, cts: msg_cts };
+
+    std::fs::create_dir_all(&output_dir).expect("Output directory should exist");
+    output_dir.push(format!("digest2"));
+    let mut file = std::fs::File::create(&output_dir)
+        .expect("File creation for storing digest one should succeed");
+    file.write_all(&serialize_digest2(&digest))
+        .expect("Writing digest buffer to digest file should succeed");
+
+    println!("{}", output_dir.to_str().unwrap());
+}
+
 fn main() {
     // fake_omr("generated/o1".into());
-    fake_create_digest1("generated/o1".into(), "generated/digests".into());
+    // fake_create_digest1("generated/o1".into(), "generated/digests".into());
+    fake_create_digest2("generated/o1".into(), "generated/digests".into());
     // let cli = Cli::parse();
     // match cli.command {
     //     Command::StartOMR {
