@@ -449,15 +449,15 @@ pub fn serialize_detection_key(key: &DetectionKey) -> Vec<u8> {
 
 pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) -> DetectionKey {
     // debug_assert!(bytes.len() == )
-    let ek1 = EvaluationKey::from_bytes(&bytes[..49889596], bfv_params).unwrap();
-    let ek2 = EvaluationKey::from_bytes(&bytes[49889596..58737190], bfv_params).unwrap();
-    let ek3 = EvaluationKey::from_bytes(&bytes[58737190..77170416], bfv_params).unwrap();
+    let ek1 = EvaluationKey::from_bytes(&bytes[..50503996], bfv_params).unwrap();
+    let ek2 = EvaluationKey::from_bytes(&bytes[50503996..59679270], bfv_params).unwrap();
+    let ek3 = EvaluationKey::from_bytes(&bytes[59679270..79341296], bfv_params).unwrap();
 
     let mut pvw_sk_cts = [
-        Ciphertext::from_bytes(&bytes[77170416..80496420], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[80496420..83822424], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[83822424..87148428], bfv_params).unwrap(),
-        Ciphertext::from_bytes(&bytes[87148428..90474432], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[79341296..82708260], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[82708260..86075224], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[86075224..89442188], bfv_params).unwrap(),
+        Ciphertext::from_bytes(&bytes[89442188..92809152], bfv_params).unwrap(),
     ];
 
     let mut rlk_keys = HashMap::<usize, RelinearizationKey>::new();
@@ -469,17 +469,17 @@ pub fn deserialize_detection_key(bfv_params: &Arc<BfvParameters>, bytes: &[u8]) 
             );
         };
     }
-    rlk!(1, 90474432..133597415);
-    rlk!(2, 133597415..172042748);
-    rlk!(3, 172042748..205957887);
-    rlk!(4, 205957887..234343408);
-    rlk!(5, 234343408..257690831);
-    rlk!(6, 257690831..276491658);
-    rlk!(7, 276491658..291237429);
-    rlk!(8, 291237429..302419664);
-    rlk!(9, 302419664..310529883);
-    rlk!(10, 310529883..316059606);
-    rlk!(11, 316059606..319500353);
+    rlk!(1, 92809152..136505575);
+    rlk!(2, 136505575..175483388);
+    rlk!(3, 175483388..209890047);
+    rlk!(4, 209890047..238726128);
+    rlk!(5, 238726128..262483151);
+    rlk!(6, 262483151..281652636);
+    rlk!(7, 281652636..296726087);
+    rlk!(8, 296726087..308195042);
+    rlk!(9, 308195042..316551021);
+    rlk!(10, 316551021..322285544);
+    rlk!(11, 322285544..325890131);
 
     DetectionKey {
         ek1,
@@ -719,9 +719,9 @@ mod tests {
     #[test]
     fn print_rlk_macro() {
         let r = vec![
-            49889596, 58737190, 77170416, 80496420, 83822424, 87148428, 90474432, 133597415,
-            172042748, 205957887, 234343408, 257690831, 276491658, 291237429, 302419664, 310529883,
-            316059606, 319500353,
+            50503996, 59679270, 79341296, 82708260, 86075224, 89442188, 92809152, 136505575,
+            175483388, 209890047, 238726128, 262483151, 281652636, 296726087, 308195042, 316551021,
+            322285544, 325890131,
         ];
         for i in (7..r.len()) {
             println!("rlk!({}, {}..{});", i - 6, r[i - 1], r[i]);
