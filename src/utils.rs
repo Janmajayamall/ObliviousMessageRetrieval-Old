@@ -499,7 +499,7 @@ pub fn serialize_digest1(digest: &Digest1) -> Vec<u8> {
 }
 
 pub fn deserialize_digest1(bytes: &[u8], bfv_params: &Arc<BfvParameters>) -> Digest1 {
-    let ct_size = 327714;
+    let ct_size = 409634;
     let cts = bytes
         .chunks_exact(ct_size)
         .map(|ct_bytes| Ciphertext::from_bytes(ct_bytes, bfv_params).unwrap())
@@ -517,7 +517,7 @@ pub fn serialize_digest2(digest: &Digest2) -> Vec<u8> {
 }
 
 pub fn deserialize_digest2(bytes: &[u8], bfv_params: &Arc<BfvParameters>) -> Digest2 {
-    let ct_size = 327714;
+    let ct_size = 409634;
 
     let mut seed: [u8; 32] = [0u8; 32];
     seed.copy_from_slice(&bytes[..32]);

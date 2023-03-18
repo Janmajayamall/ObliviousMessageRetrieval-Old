@@ -684,10 +684,11 @@ mod tests {
     use crate::client::{construct_lhs, construct_rhs, gen_pvw_sk_cts, pv_decompress};
     use crate::pvw::PvwSecretKey;
     use crate::utils::{
-        assign_buckets, deserialize_detection_key, gen_clues, gen_detection_key, gen_paylods,
-        gen_pertinent_indices, gen_rlk_keys, gen_rot_keys_inner_product, gen_rot_keys_pv_selector,
-        get_mapping, map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly,
-        serialize_detection_key, solve_equations,
+        assign_buckets, deserialize_detection_key, deserialize_digest2, gen_clues,
+        gen_detection_key, gen_paylods, gen_pertinent_indices, gen_rlk_keys,
+        gen_rot_keys_inner_product, gen_rot_keys_pv_selector, get_mapping,
+        map_rlks_to_multiplicators, powers_of_x_poly, range_fn_poly, serialize_detection_key,
+        solve_equations,
     };
     use crate::{DEGREE, MODULI_OMR, MODULI_OMR_PT, OMR_S_SIZES};
     use fhe::bfv::EvaluationKeyBuilder;
@@ -1711,30 +1712,37 @@ mod tests {
             bincode::deserialize(&std::fs::read("generated/keys/bfvPrivKey").unwrap()).unwrap();
         let bfv_sk = SecretKey::new(bfv_sk, &bfv_params);
 
-        let ct = Ciphertext::from_bytes(
-            &std::fs::read(format!("generated/digests/digest1")).unwrap(),
+        // let ct = Ciphertext::from_bytes(
+        //     &std::fs::read(format!("generated/digests/digest2")).unwrap(),
+        //     &bfv_params,
+        // )
+        // .unwrap();
+
+        let digest2 = deserialize_digest2(
+            &std::fs::read(format!("generated/digests/digest2")).unwrap(),
             &bfv_params,
-        )
-        .unwrap();
+        );
 
         unsafe {
-            dbg!(bfv_sk.measure_noise(&ct).unwrap());
+            digest2.cts.iter().for_each(|ct| {
+                dbg!(bfv_sk.measure_noise(&ct).unwrap());
+            });
         }
 
-        let mut pv =
-            Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&ct).unwrap(), Encoding::simd()).unwrap();
+        // let mut pv =
+        //     Vec::<u64>::try_decode(&bfv_sk.try_decrypt(&ct).unwrap(), Encoding::simd()).unwrap();
 
-        let mut count = 0;
-        pv.iter_mut().enumerate().for_each(|(index, v)| {
-            for _ in 0..16 {
-                let bit = *v & 1u64;
-                if bit == 1 {
-                    // dbg!(index);
-                    count += 1;
-                }
-                *v >>= 1;
-            }
-        });
-        dbg!(count);
+        // let mut count = 0;
+        // pv.iter_mut().enumerate().for_each(|(index, v)| {
+        //     for _ in 0..16 {
+        //         let bit = *v & 1u64;
+        //         if bit == 1 {
+        //             // dbg!(index);
+        //             count += 1;
+        //         }
+        //         *v >>= 1;
+        //     }
+        // });
+        // dbg!(count);
     }
 }
